@@ -80,6 +80,44 @@ export interface Conversation {
   createdAt: number;
   updatedAt: number;
   messages: Message[];
+  /** "career": a Career Guidance roadmap (stored in `career`; `messages` stays empty). */
+  kind?: "career";
+  career?: CareerRun;
+}
+
+// ---------- Career Guidance Factory ----------
+
+export type AgentId = "skills" | "career" | "learning" | "jobs";
+
+export interface CareerProfile {
+  skills: string;
+  interests: string;
+  education: string;
+  goals: string;
+  location: string;
+}
+
+export type AgentStatus = "pending" | "running" | "done" | "error" | "stopped";
+
+/** One agent's result within a roadmap. */
+export interface AgentRun {
+  status: AgentStatus;
+  content: string;
+  reasoning?: string;
+  reasoningMs?: number;
+  model?: string;
+  route?: RouteInfo;
+  usage?: Usage;
+  finishReason?: string | null;
+  error?: string;
+  errorCode?: string;
+  /** Transient status while another model replaces one that failed before answering. */
+  notice?: string;
+}
+
+export interface CareerRun {
+  profile: CareerProfile;
+  agents: Record<AgentId, AgentRun>;
 }
 
 export type HealthStatus = "checking" | "ok" | "missing_key" | "auth_failed" | "unreachable";
@@ -94,3 +132,9 @@ export type ChatEvent =
   | { type: "usage"; usage: Usage }
   | { type: "done"; finishReason: string | null }
   | { type: "error"; message: string; code?: string };
+
+/** Events streamed by POST /api/career: chat events tagged with the agent they belong to. */
+export type CareerEvent =
+  | (ChatEvent & { agent?: AgentId })
+  /** One agent finished; the next one starts. */
+  | { type: "agent-done"; agent: AgentId; finishReason: string | null };

@@ -1,10 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type Dispatch, type ReactNode } from "react";
+import { settleRun } from "../lib/career";
 import { load, save } from "../lib/storage";
-import type { Conversation, Message } from "../types";
+import type { CareerRun, Conversation, Message } from "../types";
 
 interface State {
   conversations: Conversation[]; // most recently updated first
   activeId: string | null;
+  /** The Career Guidance form is open (no conversation selected). */
+  careerForm: boolean;
 }
 
 export type MessagePatch = Partial<Message> | ((m: Message) => Partial<Message>);
@@ -12,13 +15,15 @@ export type MessagePatch = Partial<Message> | ((m: Message) => Partial<Message>)
 export type ConversationAction =
   | { type: "create"; conversation: Conversation }
   | { type: "select"; id: string | null }
+  | { type: "openCareerForm" }
   | { type: "rename"; id: string; title: string }
   | { type: "delete"; id: string }
   | { type: "clear" }
   | { type: "addMessage"; id: string; message: Message }
   | { type: "patchMessage"; id: string; messageId: string; patch: MessagePatch }
   /** Removes the given message and everything after it. */
-  | { type: "truncateFrom"; id: string; messageId: string };
+  | { type: "truncateFrom"; id: string; messageId: string }
+  | { type: "patchCareer"; id: string; patch: (run: CareerRun) => CareerRun };
 
 function touch(conversations: Conversation[], id: string, fn: (c: Conversation) => Conversation, bump = true): Conversation[] {
   const idx = conversations.findIndex((c) => c.id === id);
@@ -31,18 +36,21 @@ function touch(conversations: Conversation[], id: string, fn: (c: Conversation) 
 function reducer(state: State, action: ConversationAction): State {
   switch (action.type) {
     case "create":
-      return { conversations: [action.conversation, ...state.conversations], activeId: action.conversation.id };
+      return { conversations: [action.conversation, ...state.conversations], activeId: action.conversation.id, careerForm: false };
     case "select":
-      return { ...state, activeId: action.id };
+      return { ...state, activeId: action.id, careerForm: false };
+    case "openCareerForm":
+      return { ...state, activeId: null, careerForm: true };
     case "rename":
       return { ...state, conversations: touch(state.conversations, action.id, (c) => ({ ...c, title: action.title }), false) };
     case "delete":
       return {
         conversations: state.conversations.filter((c) => c.id !== action.id),
         activeId: state.activeId === action.id ? null : state.activeId,
+        careerForm: state.careerForm,
       };
     case "clear":
-      return { conversations: [], activeId: null };
+      return { conversations: [], activeId: null, careerForm: false };
     case "addMessage":
       return { ...state, conversations: touch(state.conversations, action.id, (c) => ({ ...c, messages: [...c.messages, action.message] })) };
     case "patchMessage":
@@ -70,6 +78,8 @@ function reducer(state: State, action: ConversationAction): State {
           return idx < 0 ? c : { ...c, messages: c.messages.slice(0, idx) };
         }),
       };
+    case "patchCareer":
+      return { ...state, conversations: touch(state.conversations, action.id, (c) => (c.career ? { ...c, career: action.patch(c.career) } : c), false) };
   }
 }
 
@@ -78,14 +88,16 @@ function initialState(): State {
   // A reload mid-stream leaves messages marked "streaming": they can never finish now.
   for (const c of conversations) {
     for (const m of c.messages) if (m.status === "streaming") m.status = "stopped";
+    if (c.career) c.career = settleRun(c.career);
   }
-  return { conversations, activeId: null };
+  return { conversations, activeId: null, careerForm: false };
 }
 
 interface ConversationsContextValue {
   conversations: Conversation[];
   active: Conversation | null;
   activeId: string | null;
+  careerForm: boolean;
   dispatch: Dispatch<ConversationAction>;
   /** Latest state, readable from async callbacks without stale closures. */
   getState: () => State;
@@ -146,6 +158,7 @@ export function ConversationsProvider({ children, onPersistError }: { children: 
     () => ({
       conversations: state.conversations,
       activeId: state.activeId,
+      careerForm: state.careerForm,
       active: state.conversations.find((c) => c.id === state.activeId) ?? null,
       dispatch,
       getState,

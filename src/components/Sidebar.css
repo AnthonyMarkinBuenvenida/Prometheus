@@ -73,6 +73,30 @@
   background: var(--bg-elevated-hover);
   border-color: var(--border-strong);
 }
+/* Career Guidance Factory entry, below New chat */
+.career-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px 0 12px;
+  border-radius: var(--r-md);
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.career-nav svg {
+  color: var(--accent-text);
+}
+.career-nav:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.career-nav.is-active {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+}
+
 .new-chat-kbd,
 .search-kbd {
   display: inline-flex;
@@ -183,6 +207,10 @@
   .conv-link {
     padding-right: 36px;
   }
+}
+.conv-kind {
+  flex: none;
+  color: var(--accent-text);
 }
 .conv-live {
   flex: none;

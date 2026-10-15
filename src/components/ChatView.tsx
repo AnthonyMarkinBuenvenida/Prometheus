@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCareer } from "../state/career";
 import { useChat } from "../state/chat";
 import { useDraftActions } from "../state/draft";
 import { useConversations } from "../state/conversations";
@@ -17,6 +18,7 @@ const SUGGESTIONS: { icon: IconName; title: string; prompt: string }[] = [
 
 function EmptyState() {
   const { setDraft, focusComposer } = useDraftActions();
+  const { openForm } = useCareer();
   const { activeModel, health, healthMessage } = useServer();
   const blocked = health === "missing_key" || health === "auth_failed" || health === "unreachable";
 
@@ -64,6 +66,15 @@ function EmptyState() {
             </button>
           ))}
         </div>
+
+        <button type="button" className="career-promo" onClick={() => openForm()}>
+          <Icon name="briefcase" size={20} />
+          <span className="career-promo-text">
+            <span className="career-promo-title">Career Guidance Factory</span>
+            <span className="career-promo-desc">Four AI agents turn your skills and goals into a personalized career and learning roadmap.</span>
+          </span>
+          <Icon name="chevronRight" size={16} />
+        </button>
       </div>
     </div>
   );

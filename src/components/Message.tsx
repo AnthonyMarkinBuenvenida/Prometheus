@@ -10,7 +10,7 @@ import { Icon, Logo } from "./Icon";
 import { Markdown } from "./Markdown";
 import "./Message.css";
 
-function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   const toast = useToast();
   return (
@@ -33,7 +33,7 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
   );
 }
 
-function Reasoning({ text, ms, active }: { text: string; ms?: number; active: boolean }) {
+export function Reasoning({ text, ms, active }: { text: string; ms?: number; active: boolean }) {
   const { settings } = useSettings();
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const open = userOpen ?? (active || settings.expandReasoning);

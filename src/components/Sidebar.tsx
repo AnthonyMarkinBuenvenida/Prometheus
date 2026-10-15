@@ -1,6 +1,8 @@
 import { memo, useCallback, useDeferredValue, useMemo, useState, type RefObject } from "react";
+import { careerSearchText } from "../lib/career";
 import { conversationToMarkdown } from "../lib/export";
 import { dateGroup, downloadFile, modKey, safeFileName, type DateGroup } from "../lib/util";
+import { useCareer } from "../state/career";
 import { useChat } from "../state/chat";
 import { useDraftActions } from "../state/draft";
 import { useConversationActions, useConversations } from "../state/conversations";
@@ -52,6 +54,7 @@ function StatusButton({ compact }: { compact?: boolean }) {
 
 export function Sidebar({ mode, open, onToggle, onNavigate, onOpenSettings, onSearch, searchRef }: SidebarProps) {
   const { newChat } = useChat();
+  const { openForm } = useCareer();
   const { focusComposer } = useDraftActions();
   const navigateFromList = useCallback(() => {
     onNavigate();
@@ -67,6 +70,9 @@ export function Sidebar({ mode, open, onToggle, onNavigate, onOpenSettings, onSe
         </button>
         <button type="button" className="icon-btn" onClick={newChat} aria-label="New chat" data-tooltip={`New chat (${modKey}+Shift+O)`} data-tooltip-side="right">
           <Icon name="compose" />
+        </button>
+        <button type="button" className="icon-btn" onClick={() => openForm()} aria-label="Career Guidance" data-tooltip="Career Guidance" data-tooltip-side="right">
+          <Icon name="briefcase" />
         </button>
         <button type="button" className="icon-btn" onClick={onSearch} aria-label="Search chats" data-tooltip={`Search (${modKey}+K)`} data-tooltip-side="right">
           <Icon name="search" />
@@ -119,6 +125,13 @@ export function Sidebar({ mode, open, onToggle, onNavigate, onOpenSettings, onSe
         </span>
       </button>
 
+      <CareerNav
+        onOpen={() => {
+          openForm();
+          onNavigate();
+        }}
+      />
+
       <ConversationList searchRef={searchRef} onNavigate={navigateFromList} />
 
       <div className="sidebar-footer">
@@ -131,11 +144,23 @@ export function Sidebar({ mode, open, onToggle, onNavigate, onOpenSettings, onSe
   );
 }
 
+/** Entry to the Career Guidance Factory form; highlighted while the form is open. */
+function CareerNav({ onOpen }: { onOpen: () => void }) {
+  const { careerForm } = useConversations();
+  return (
+    <button type="button" className={`career-nav${careerForm ? " is-active" : ""}`} aria-current={careerForm ? "page" : undefined} onClick={onOpen}>
+      <Icon name="briefcase" size={17} />
+      <span>Career Guidance</span>
+    </button>
+  );
+}
+
 const GROUP_ORDER: DateGroup[] = ["Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Older"];
 
 function ConversationList({ searchRef, onNavigate }: { searchRef: RefObject<HTMLInputElement | null>; onNavigate: () => void }) {
   const { conversations: live, activeId } = useConversations();
   const { streaming } = useChat();
+  const { running } = useCareer();
   const [query, setQuery] = useState("");
   // Streaming updates the list ~60x/s; grouping and (when searching) full-text matching run at
   // lower priority so they never delay typing or the message view.
@@ -144,7 +169,7 @@ function ConversationList({ searchRef, onNavigate }: { searchRef: RefObject<HTML
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matches = q
-      ? conversations.filter((c) => c.title.toLowerCase().includes(q) || c.messages.some((m) => m.content.toLowerCase().includes(q)))
+      ? conversations.filter((c) => c.title.toLowerCase().includes(q) || c.messages.some((m) => m.content.toLowerCase().includes(q)) || careerSearchText(c).includes(q))
       : conversations;
     const byGroup = new Map<DateGroup, Conversation[]>();
     for (const c of matches) {
@@ -204,7 +229,7 @@ function ConversationList({ searchRef, onNavigate }: { searchRef: RefObject<HTML
               <h3 className="conv-group-label">{g.label}</h3>
               <ul>
                 {g.items.map((c) => (
-                  <ConversationItem key={c.id} conversation={c} active={c.id === activeId} live={streaming?.conversationId === c.id} onNavigate={onNavigate} />
+                  <ConversationItem key={c.id} conversation={c} active={c.id === activeId} live={streaming?.conversationId === c.id || running === c.id} onNavigate={onNavigate} />
                 ))}
               </ul>
             </section>
@@ -227,7 +252,8 @@ const ConversationItem = memo(function ConversationItem({
   onNavigate: () => void;
 }) {
   const { dispatch } = useConversationActions();
-  const { stop } = useChat();
+  const { stop: stopChat } = useChat();
+  const { stop: stopCareer } = useCareer();
   const { modelLabel } = useServer();
   const confirm = useConfirm();
   const toast = useToast();
@@ -247,7 +273,7 @@ const ConversationItem = memo(function ConversationItem({
       danger: true,
     });
     if (!ok) return;
-    if (live) stop();
+    if (live) (conversation.kind === "career" ? stopCareer : stopChat)();
     dispatch({ type: "delete", id: conversation.id });
     toast("Conversation deleted");
   };
@@ -284,6 +310,7 @@ const ConversationItem = memo(function ConversationItem({
             onDoubleClick={() => setEditing(true)}
           >
             {live && <span className="conv-live" aria-label="Generating" />}
+            {conversation.kind === "career" && !live && <Icon name="briefcase" size={14} className="conv-kind" />}
             <span className="conv-title">{conversation.title}</span>
           </button>
           <ActionMenu

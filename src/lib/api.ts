@@ -1,4 +1,4 @@
-import type { ChatEvent, DemoLimits, HealthStatus, Message, ModelInfo } from "../types";
+import type { CareerEvent, CareerProfile, ChatEvent, DemoLimits, HealthStatus, Message, ModelInfo } from "../types";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -85,8 +85,29 @@ export interface ChatRequest {
 }
 
 /** Streams a chat completion. Resolves when the stream ends; throws ApiError, or the abort reason if cancelled. */
-export async function streamChat(req: ChatRequest, signal: AbortSignal, onEvent: (e: ChatEvent) => void): Promise<void> {
-  const res = await postJson("/api/chat", req, signal);
+export function streamChat(req: ChatRequest, signal: AbortSignal, onEvent: (e: ChatEvent) => void): Promise<void> {
+  return streamEvents("/api/chat", req, signal, onEvent);
+}
+
+export interface CareerRequest {
+  model: string;
+  profile: CareerProfile;
+  temperature: number;
+  topP: number;
+  thinking: boolean;
+  allowFallback?: boolean;
+  /** Index of the first agent to run (0 = Skills Agent) and the results of the agents before it. */
+  from?: number;
+  previous?: Partial<Record<string, string>>;
+}
+
+/** Streams a Career Guidance run (four agents). Same contract as streamChat. */
+export function streamCareer(req: CareerRequest, signal: AbortSignal, onEvent: (e: CareerEvent) => void): Promise<void> {
+  return streamEvents("/api/career", req, signal, onEvent);
+}
+
+async function streamEvents<E extends { type: string }>(path: string, req: unknown, signal: AbortSignal, onEvent: (e: E) => void): Promise<void> {
+  const res = await postJson(path, req, signal);
   if (!res.ok || !res.body) throw await errorFrom(res);
 
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -102,7 +123,7 @@ export async function streamChat(req: ChatRequest, signal: AbortSignal, onEvent:
         const frame = buffer.slice(0, sep);
         buffer = buffer.slice(sep + 2);
         if (!frame.startsWith("data:")) continue;
-        const event = JSON.parse(frame.slice(5)) as ChatEvent;
+        const event = JSON.parse(frame.slice(5)) as E;
         if (event.type === "done" || event.type === "error") ended = true;
         onEvent(event);
       }

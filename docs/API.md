@@ -44,12 +44,23 @@ On success: `text/event-stream`, one JSON object per `data:` frame:
 
 **Cancellation**: when the client disconnects (Stop, closed tab) the upstream request is aborted so the provider stops generating. On Vercel this requires `supportsCancellation: true` on the function.
 
+### `POST /api/career`
+The **Career Guidance Factory** (`server/career.mjs`): four agents run one after another in one stream — Skills Agent (evaluates the user's skills), Career Agent (recommends careers), Learning Agent (phased learning roadmap with courses), Job Matching Agent (suitable roles, where to look). Each agent is one model call with its own system prompt; its user message holds the profile and every earlier agent's output.
+
+Request: `{ model, profile: { skills, interests, education, goals, location }, temperature, topP, thinking, allowFallback?, from?, previous? }`. `skills` is required (≤ 3,000 chars; the others ≤ 2,000 / 1,000 / 2,000 / 120). `from` (0–3) resumes at that agent; `previous` must then hold the earlier agents' results (`{ skills, career, … }`, ≤ 40,000 chars each). Validation errors are 400 `invalid_request` before any model call.
+
+Each agent goes through the same attempt loop as chat (`runAttempts` in `server/api.mjs`): the chosen model first, fallback only with `allowFallback`, the same A–D states, timers and health. Reasoning effort is fixed per agent (low for Skills and Job Matching, medium for Career and Learning). The whole run shares one stream limit (285 s on Vercel/Cloud Run) and counts as **one message** for rate limiting (one `acquireChat`).
+
+Events are the chat events with an `agent` field (`skills` | `career` | `learning` | `jobs`), plus `{ type: "agent-done", agent, finishReason }` after each agent and `{ type: "done" }` after the last. A failed agent ends the run with `{ type: "error", agent, message, code }` (`empty_response` if it produced no text); the browser offers to resume from that agent. If the first agent fails before anything streamed, the response is a JSON error, as in chat.
+
+The agents never write URLs. The Learning and Job Matching agents end with a fenced `json` block (`{"courses": […]}` / `{"jobs": […]}`); the browser hides it and turns each name into search links (Coursera, edX, YouTube; LinkedIn, Indeed, Google with the user's location) in `src/lib/career.ts`.
+
 ### Error codes
 `forbidden_origin` 403 · `not_found` 404 · `method_not_allowed` 405 · `unsupported_media_type` 415 · `missing_key` 503 · `invalid_json` / `invalid_request` / `invalid_model` 400 · `too_large` / `too_long` 413 · `rate_limited` / `too_many_streams` 429 (with `Retry-After`) · `auth_failed` / `model_unavailable` / `upstream_error` / `upstream_unreachable` 502 · `invalid_model` 400 also for a manual model that is no longer available · `payment_required` 402 (OpenRouter needs credits) · `upstream_busy` 503 ("high demand") · `upstream_timeout` 504 · in-stream: `idle_timeout`, `max_duration`, `blocked`, `upstream_error` (the provider failed mid-stream; Gemini's SDK drops the error event, so any stream that ends without a finish reason is reported as this). Unexpected failures return 500 `server_error` with a generic message; details go to the function log only. Unknown `/api/*` paths on Vercel get the platform's 404.
 
 ## Rate limiting (`server/limits.mjs`)
 
-Applied to `POST /api/chat` **before the body is read** (invalid requests count too), keyed by client IP:
+Applied to `POST /api/chat` and `POST /api/career` (one whole career run = one message) **before the body is read** (invalid requests count too), keyed by client IP:
 
 | Limit | Default | Env |
 |---|---|---|

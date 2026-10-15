@@ -194,6 +194,10 @@ describe("vercel.json", () => {
     else process.env.VERCEL = saved;
   });
 
+  test("career function streams under the same limits as chat", () => {
+    assert.deepEqual(cfg.functions["api/career.mjs"], cfg.functions["api/chat.mjs"]);
+  });
+
   test("every API route has a function file", () => {
     for (const fn of Object.keys(cfg.functions)) readFileSync(new URL(`../${fn}`, import.meta.url));
   });

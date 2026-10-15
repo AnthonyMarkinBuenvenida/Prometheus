@@ -11,8 +11,10 @@
 //   GET  /api/health  -> { status: "ok" | "missing_key" | "auth_failed" | "unreachable", message, providers } (?fresh: at most every 5s)
 //   GET  /api/models  -> { models, defaultModel, limits }
 //   POST /api/chat    -> text/event-stream of normalized events (see docs/API.md)
+//   POST /api/career  -> the Career Guidance Factory: four agents in one stream (server/career.mjs)
 
 import { waitUntil } from "@vercel/functions";
+import { AGENTS, agentMessages, CareerInputError, validateProfile, validateResume } from "./career.mjs";
 import { clientIp, isSameOrigin, logId } from "./http.mjs";
 import { acquireChat, LimitError, limitScope } from "./limits.mjs";
 import { geminiProvider } from "./providers/gemini.mjs";
@@ -256,7 +258,8 @@ async function modelsRoute(res) {
   });
 }
 
-async function chat(req, res) {
+/** Takes the client's rate-limit slot for a model-calling request (one message), held until the response ends. */
+async function acquire(req, res) {
   if (!Object.values(PROVIDERS).some((p) => p.configured())) throw new HttpError(503, "The server has no API key configured.", "missing_key");
 
   let release;
@@ -271,10 +274,24 @@ async function chat(req, res) {
   res.on("close", () => {
     if (!res.writableFinished) waitUntil(release());
   });
+  return release;
+}
+
+async function chat(req, res) {
+  const release = await acquire(req, res);
   try {
     await streamCompletion(req, res, release);
   } finally {
     await release(); // idempotent; covers errors thrown before streaming started
+  }
+}
+
+async function career(req, res) {
+  const release = await acquire(req, res);
+  try {
+    await streamCareer(req, res, release);
+  } finally {
+    await release();
   }
 }
 
@@ -288,69 +305,101 @@ async function firstEvent(iterator, onAlive) {
   }
 }
 
-async function streamCompletion(req, res, release) {
-  const body = await readJson(req);
-  const messages = validateMessages(body.messages);
-  const system = typeof body.system === "string" ? body.system.trim().slice(0, MAX_SYSTEM_CHARS) : "";
-  const promptChars = system.length + messages.reduce((n, m) => n + m.content.length, 0);
-  const models = await availableModels();
-  // There is no automatic model selection (removed 2026-10-15: it kept landing on overloaded Gemini
-  // models). No model, or "auto" from a page loaded before that change, means the default model.
-  const requested = !body.model || body.model === AUTO ? defaultModelId(models) : body.model;
-  const manualFallback = body.allowFallback === true;
+/** The requested model id: no model, or "auto" from a page loaded before automatic selection was removed, means the default. */
+function requestedModel(body, models) {
+  return !body.model || body.model === AUTO ? defaultModelId(models) : body.model;
+}
 
-  // ----- Decide which models to try -----
+/** Remaining shared free quota per provider (only needed to rank fallback models). */
+async function fallbackBudget(fallback) {
   const budget = {};
-  if (openrouterProvider.configured() && manualFallback) budget.openrouter = await openrouterProvider.budget();
-  const routeReq = { messages, system, maxTokens: body.maxTokens, thinking: body.thinking, continuation: body.continuation === true, previousModel: typeof body.previousModel === "string" ? body.previousModel : undefined };
+  if (openrouterProvider.configured() && fallback) budget.openrouter = await openrouterProvider.budget();
+  return budget;
+}
+
+/** Models to try, in order: the chosen model first; with "fall back" on, the router's ranking supplies the others. */
+function planOrder(models, requested, fallback, routeReq, budget) {
   const decision = plan(routeReq, models, { budget });
-  // The chosen model first; with "fall back" on, the router's ranking supplies the other models to try.
   const chosen = models.find((m) => m.id === requested);
   if (!chosen) throw new HttpError(400, "That model is no longer available. Pick another model.", "invalid_model");
   const entry = decision.candidates.find((c) => c.model.id === chosen.id) ?? { model: chosen, score: null, parts: {}, bonus: [] };
-  const order = [entry, ...(manualFallback ? decision.candidates.filter((c) => c.model.id !== chosen.id) : [])];
+  return { decision, order: [entry, ...(fallback ? decision.candidates.filter((c) => c.model.id !== chosen.id) : [])] };
+}
 
-  // ----- Timers shared by all attempts -----
+/**
+ * Streaming state of one request: the response, its time limit and client disconnects. Shared by
+ * every model call the request makes (chat: one reply; career: one per agent). Headers are sent
+ * lazily, with the first model event, so a request that fails before that still gets a JSON error.
+ */
+function openStream(res, release) {
   const limitMs = streamLimitMs();
-  let current = null; // AbortController of the attempt in progress
-  let abortCause = null; // "client" | "max_duration" | "idle_timeout" (request-wide)
-  let finished = false;
-  const abortAll = (cause) => {
-    if (!abortCause) abortCause = cause;
-    current?.abort();
+  const s = {
+    limitMs,
+    current: null, // AbortController of the attempt in progress
+    abortCause: null, // "client" | "max_duration" (request-wide)
+    finished: false,
+    headersSent: false,
+    deadline: Date.now() + headersTimeoutMs(), // for the first token, while nothing has been sent
+    streamEnd: Date.now() + limitMs - 15_000, // latest time an attempt may still start
+    abortAll(cause) {
+      if (!s.abortCause) s.abortCause = cause;
+      s.current?.abort();
+    },
+    sendHeaders() {
+      if (s.headersSent) return;
+      s.headersSent = true;
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+    },
+    write: (event) => writeEvent(res, event),
+    async end() {
+      clearTimeout(maxTimer);
+      s.finished = true;
+      if (s.headersSent) {
+        await release(); // free the slot before ending: the platform may freeze the request after
+        res.end();
+      }
+    },
   };
   res.on("close", () => {
-    if (!finished) abortAll("client");
+    if (!s.finished) s.abortAll("client");
   });
-  const maxTimer = setTimeout(() => abortAll("max_duration"), limitMs);
-  const deadline = Date.now() + headersTimeoutMs();
+  const maxTimer = setTimeout(() => s.abortAll("max_duration"), limitMs);
+  return s;
+}
 
-  // ----- Try candidates; stream the first that works -----
-  // Per attempt, what has reached the browser decides whether another model may take over:
-  //   A  nothing yet            → fall back silently
-  //   B  reasoning only         → fall back: a "reset" event (sent only when another model actually
-  //                                starts) makes the browser discard the attempt
-  //   C  answer text started    → no fallback: an error ends the reply (never mix two models' answers)
-  //   D  finished               → done
+/** Ends a stream whose model call failed: an error event, or a JSON error when nothing was sent yet. */
+function failStream(s, error, extra = {}) {
+  if (!s.headersSent) throw error;
+  s.write({ type: "error", message: error.message, code: error.code, ...extra });
+}
+
+/**
+ * Streams one model reply: the first model in `order`, then (with fallback on) the next ones until
+ * one works. Per attempt, what has reached the browser decides whether another model may take over:
+ *   A  nothing yet            → fall back silently
+ *   B  reasoning only         → fall back: a "reset" event (sent only when another model actually
+ *                                starts) makes the browser discard the attempt
+ *   C  answer text started    → no fallback: an error ends the reply (never mix two models' answers)
+ *   D  finished               → done
+ * Events go through `emit`; `onStart` writes the start event once a model is answering.
+ * Returns { ok: true, model, finishReason, text } when a model finished, else { ok: false, error }
+ * (error is null when the client went away).
+ */
+async function runAttempts(s, { models, order, fallback, tier, request, emit, onStart }) {
+  const { messages, system } = request;
+  const promptChars = system.length + messages.reduce((n, m) => n + m.content.length, 0);
   const attempts = [];
-  const maxAttempts = manualFallback ? MAX_ATTEMPTS() : 1;
+  const maxAttempts = fallback ? MAX_ATTEMPTS() : 1;
   const excludedProviders = new Set(); // provider-wide failures (bad key, unreachable)
   const excludedFree = new Set(); // providers whose shared free quota ran out
-  const streamEnd = Date.now() + limitMs - 15_000; // latest time a fallback attempt may still start
-  let headersSent = false;
   let pendingReset = null; // set when a model failed after reasoning; sent when the next attempt starts
   let lastErr = null;
   const label = (id) => models.find((m) => m.id === id)?.label ?? id;
-  const sendHeaders = () => {
-    if (headersSent) return;
-    headersSent = true;
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-  };
 
   const tried = new Set();
   /**
@@ -368,149 +417,222 @@ async function streamCompletion(req, res, release) {
     return usable[0];
   };
 
-  try {
-    for (;;) {
-      if (attempts.length >= maxAttempts || abortCause) break;
-      const entry = nextCandidate();
-      if (!entry) break;
-      tried.add(entry.model.id);
-      const model = entry.model;
-      const provider = PROVIDERS[model.provider];
-      const remaining = (headersSent ? streamEnd : deadline) - Date.now();
-      if (remaining <= 1000) break;
-      // Back off before retrying the same provider after a provider-side failure.
-      const prev = attempts.at(-1);
-      if (prev && prev.provider === model.provider && prev.kind === "overloaded") {
-        await new Promise((r) => setTimeout(r, Math.min(2000, 300 * 2 ** (attempts.length - 1))));
-        if (abortCause) break; // Stop pressed while waiting: never start another model
-      }
+  for (;;) {
+    if (attempts.length >= maxAttempts || s.abortCause) break;
+    const entry = nextCandidate();
+    if (!entry) break;
+    tried.add(entry.model.id);
+    const model = entry.model;
+    const provider = PROVIDERS[model.provider];
+    const remaining = (s.headersSent ? s.streamEnd : s.deadline) - Date.now();
+    if (remaining <= 1000) break;
+    // Back off before retrying the same provider after a provider-side failure.
+    const prev = attempts.at(-1);
+    if (prev && prev.provider === model.provider && prev.kind === "overloaded") {
+      await new Promise((r) => setTimeout(r, Math.min(2000, 300 * 2 ** (attempts.length - 1))));
+      if (s.abortCause) break; // Stop pressed while waiting: never start another model
+    }
 
-      const maxTokens = planMaxTokens(model, body.maxTokens, promptChars);
-      if (maxTokens < 256) {
-        attempts.push({ model: model.id, provider: model.provider, ok: false, error: "context too small", kind: "rejected", ms: 0 });
-        continue;
-      }
-      const ctrl = new AbortController();
-      current = ctrl;
-      const started = Date.now();
-      let attemptAbort = null; // "timeout" (no first event in time) | "idle" (silence mid-stream)
-      let timer;
-      const arm = (ms, cause) => {
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          attemptAbort = cause;
-          ctrl.abort();
-        }, ms);
+    const maxTokens = planMaxTokens(model, request.maxTokens, promptChars);
+    if (maxTokens < 256) {
+      attempts.push({ model: model.id, provider: model.provider, ok: false, error: "context too small", kind: "rejected", ms: 0 });
+      continue;
+    }
+    const ctrl = new AbortController();
+    s.current = ctrl;
+    const started = Date.now();
+    let attemptAbort = null; // "timeout" (no first event in time) | "idle" (silence mid-stream)
+    let timer;
+    const arm = (ms, cause) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        attemptAbort = cause;
+        ctrl.abort();
+      }, ms);
+    };
+    arm(fallback ? Math.min(attemptTimeoutMs(), remaining) : remaining, "timeout");
+    const record = { model: model.id, provider: model.provider, ok: false, ms: 0 };
+    attempts.push(record);
+    let phase = "A";
+    let finishReason = null;
+    let text = "";
+    if (pendingReset) {
+      emit(pendingReset);
+      pendingReset = null;
+    }
+    try {
+      const reply = await provider.open({
+        model,
+        messages,
+        system,
+        temperature: request.temperature,
+        topP: request.topP,
+        maxTokens,
+        effort: effortFor(model, tier, request.thinking),
+        signal: ctrl.signal,
+      });
+      const iterator = reply.events[Symbol.asyncIterator]();
+      const first = await firstEvent(iterator, () => arm(IDLE_TIMEOUT_MS, "idle"));
+      health.recordSuccess(model.id, { ttftMs: Date.now() - started });
+      record.ok = true;
+      record.ms = Date.now() - started;
+
+      const fallbackFrom = attempts.filter((a) => !a.ok).map((a) => label(a.model));
+      s.sendHeaders();
+      onStart({ model, provider, entry, reply, attempts, fallbackFrom });
+
+      const handle = (event) => {
+        if (event.type === "finish") finishReason = event.reason;
+        else if (event.type !== "alive") {
+          if (event.type === "content") {
+            phase = "C";
+            text += event.text;
+          } else if (event.type === "reasoning" && phase === "A") phase = "B";
+          emit(event);
+        }
       };
-      arm(manualFallback ? Math.min(attemptTimeoutMs(), remaining) : remaining, "timeout");
-      const record = { model: model.id, provider: model.provider, ok: false, ms: 0 };
-      attempts.push(record);
-      let phase = "A";
-      let finishReason = null;
-      if (pendingReset) {
-        writeEvent(res, pendingReset);
-        pendingReset = null;
-      }
-      try {
-        const reply = await provider.open({
-          model,
-          messages,
-          system,
-          temperature: clamp(body.temperature, 0, 2, 0.6),
-          topP: clamp(body.topP, 0.01, 1, 0.95),
-          maxTokens,
-          effort: effortFor(model, decision.task.tier, body.thinking),
-          signal: ctrl.signal,
-        });
-        const iterator = reply.events[Symbol.asyncIterator]();
-        const first = await firstEvent(iterator, () => arm(IDLE_TIMEOUT_MS, "idle"));
-        health.recordSuccess(model.id, { ttftMs: Date.now() - started });
-        record.ok = true;
-        record.ms = Date.now() - started;
-
-        const fallbackFrom = attempts.filter((a) => !a.ok).map((a) => label(a.model));
-        const route = {
-          mode: "manual",
-          provider: provider.label,
-          model: model.label,
-          task: decision.task.type,
-          reason: reasonFor(decision, entry, { fallbackFrom, manual: true }),
-          fallbackFrom,
-        };
-        sendHeaders();
-        const start = { type: "start", model: model.id, maxTokens: reply.maxTokens, limitSeconds: Math.floor(limitMs / 1000), route };
-        if (body.debug === true) start.debug = debugInfo(decision, entry, attempts, order);
-        writeEvent(res, start);
-
-        const handle = (event) => {
-          if (event.type === "finish") finishReason = event.reason;
-          else if (event.type !== "alive") {
-            if (event.type === "content") phase = "C";
-            else if (event.type === "reasoning" && phase === "A") phase = "B";
-            writeEvent(res, event);
-          }
-        };
+      arm(IDLE_TIMEOUT_MS, "idle");
+      if (first) handle(first);
+      for (;;) {
+        const { value, done } = await iterator.next();
+        if (done) break;
         arm(IDLE_TIMEOUT_MS, "idle");
-        if (first) handle(first);
-        for (;;) {
-          const { value, done } = await iterator.next();
-          if (done) break;
-          arm(IDLE_TIMEOUT_MS, "idle");
-          handle(value);
-        }
-        clearTimeout(timer);
-        writeEvent(res, { type: "done", finishReason });
-        return; // D
-      } catch (err) {
-        clearTimeout(timer);
-        record.ok = false;
-        record.ms = Date.now() - started;
-        if (abortCause) break; // Stop or the time limit: end without trying another model
-        const error = attemptAbort === "timeout" ? Object.assign(new Error("attempt timeout"), { attemptTimeout: true }) : attemptAbort === "idle" ? new UpstreamError(0, "", "midstream") : err;
-        const f = failureKind(error);
-        health.recordFailure(model.id, f.kind);
-        if (f.provider) {
-          health.recordProviderFailure(model.provider, f.provider.kind, { scope: f.provider.scope });
-          (f.provider.scope === "free" ? excludedFree : excludedProviders).add(model.provider);
-        }
-        const mapped = attemptAbort === "idle" ? new HttpError(502, "The model stopped responding partway through. Try regenerating.", "idle_timeout") : mapUpstreamError(error, provider);
-        record.error = mapped.code;
-        record.kind = f.kind;
-        record.phase = phase;
-        lastErr = { mapped };
-        if (phase === "C") {
-          // Answer text has reached the browser: never switch models now.
-          writeEvent(res, { type: "error", message: mapped.message, code: mapped.code });
-          return;
-        }
-        if (phase === "B") {
-          // Only reasoning was sent: if another model is tried, the browser first discards this attempt.
-          // If none is (manual model, attempts used up), the reasoning stays with the error, as before.
-          pendingReset = { type: "reset", message: "The model is busy. Trying another available model…", code: mapped.code };
-        }
-        if (!f.retryable) break;
+        handle(value);
       }
+      clearTimeout(timer);
+      return { ok: true, model, finishReason, text }; // D
+    } catch (err) {
+      clearTimeout(timer);
+      record.ok = false;
+      record.ms = Date.now() - started;
+      if (s.abortCause) break; // Stop or the time limit: end without trying another model
+      const error = attemptAbort === "timeout" ? Object.assign(new Error("attempt timeout"), { attemptTimeout: true }) : attemptAbort === "idle" ? new UpstreamError(0, "", "midstream") : err;
+      const f = failureKind(error);
+      health.recordFailure(model.id, f.kind);
+      if (f.provider) {
+        health.recordProviderFailure(model.provider, f.provider.kind, { scope: f.provider.scope });
+        (f.provider.scope === "free" ? excludedFree : excludedProviders).add(model.provider);
+      }
+      const mapped = attemptAbort === "idle" ? new HttpError(502, "The model stopped responding partway through. Try regenerating.", "idle_timeout") : mapUpstreamError(error, provider);
+      record.error = mapped.code;
+      record.kind = f.kind;
+      record.phase = phase;
+      lastErr = { mapped };
+      // Answer text has reached the browser: never switch models now.
+      if (phase === "C") return { ok: false, error: mapped };
+      if (phase === "B") {
+        // Only reasoning was sent: if another model is tried, the browser first discards this attempt.
+        // If none is (manual model, attempts used up), the reasoning stays with the error, as before.
+        pendingReset = { type: "reset", message: "The model is busy. Trying another available model…", code: mapped.code };
+      }
+      if (!f.retryable) break;
     }
+  }
 
-    // No attempt finished.
-    if (abortCause === "client") return;
-    let failure;
-    if (abortCause === "max_duration") failure = headersSent
-      ? new HttpError(504, `This demo stops a single response after ${Math.round(limitMs / 1000)} seconds. Use Continue to keep going.`, "max_duration")
-      : new HttpError(504, "No model started responding before the time limit. Try again.", "upstream_timeout");
-    else {
-      failure = lastErr?.mapped ?? new HttpError(503, "No model is available right now. Try again shortly.", "upstream_busy");
-      if (attempts.length > 1) failure.message = `No available model could answer right now (tried ${attempts.map((a) => label(a.model)).join(", ")}). ${failure.message}`;
-    }
-    if (!headersSent) throw failure;
-    writeEvent(res, { type: "error", message: failure.message, code: failure.code });
+  // No attempt finished.
+  if (s.abortCause === "client") return { ok: false, error: null };
+  let failure;
+  if (s.abortCause === "max_duration") failure = s.headersSent
+    ? new HttpError(504, `This demo stops a single response after ${Math.round(s.limitMs / 1000)} seconds. Use Continue to keep going.`, "max_duration")
+    : new HttpError(504, "No model started responding before the time limit. Try again.", "upstream_timeout");
+  else {
+    failure = lastErr?.mapped ?? new HttpError(503, "No model is available right now. Try again shortly.", "upstream_busy");
+    if (attempts.length > 1) failure.message = `No available model could answer right now (tried ${attempts.map((a) => label(a.model)).join(", ")}). ${failure.message}`;
+  }
+  return { ok: false, error: failure };
+}
+
+async function streamCompletion(req, res, release) {
+  const body = await readJson(req);
+  const messages = validateMessages(body.messages);
+  const system = typeof body.system === "string" ? body.system.trim().slice(0, MAX_SYSTEM_CHARS) : "";
+  const models = await availableModels();
+  // There is no automatic model selection (removed 2026-10-15: it kept landing on overloaded Gemini models).
+  const requested = requestedModel(body, models);
+  const fallback = body.allowFallback === true;
+  const budget = await fallbackBudget(fallback);
+  const routeReq = { messages, system, maxTokens: body.maxTokens, thinking: body.thinking, continuation: body.continuation === true, previousModel: typeof body.previousModel === "string" ? body.previousModel : undefined };
+  const { decision, order } = planOrder(models, requested, fallback, routeReq, budget);
+
+  const s = openStream(res, release);
+  try {
+    const result = await runAttempts(s, {
+      models,
+      order,
+      fallback,
+      tier: decision.task.tier,
+      request: { messages, system, maxTokens: body.maxTokens, thinking: body.thinking, temperature: clamp(body.temperature, 0, 2, 0.6), topP: clamp(body.topP, 0.01, 1, 0.95) },
+      emit: s.write,
+      onStart: ({ model, provider, entry, reply, attempts, fallbackFrom }) => {
+        const route = { mode: "manual", provider: provider.label, model: model.label, task: decision.task.type, reason: reasonFor(decision, entry, { fallbackFrom, manual: true }), fallbackFrom };
+        const start = { type: "start", model: model.id, maxTokens: reply.maxTokens, limitSeconds: Math.floor(s.limitMs / 1000), route };
+        if (body.debug === true) start.debug = debugInfo(decision, entry, attempts, order);
+        s.write(start);
+      },
+    });
+    if (result.ok) s.write({ type: "done", finishReason: result.finishReason });
+    else if (result.error) failStream(s, result.error);
   } finally {
-    clearTimeout(maxTimer);
-    finished = true;
-    if (headersSent) {
-      await release(); // free the slot before ending: the platform may freeze the request after
-      res.end();
+    await s.end();
+  }
+}
+
+/**
+ * Career Guidance Factory (server/career.mjs): the agents run one after another in one request —
+ * one rate-limited message — each with the chosen model (and the same fallback rules as chat).
+ * Every event carries `agent`; "agent-done" closes an agent, "done" the whole run. A failed agent
+ * ends the run with an error event; the browser can resume from that agent (`from` + `previous`).
+ */
+async function streamCareer(req, res, release) {
+  const body = await readJson(req);
+  let profile;
+  let resume;
+  try {
+    profile = validateProfile(body.profile);
+    resume = validateResume(body.from, body.previous);
+  } catch (err) {
+    if (err instanceof CareerInputError) throw new HttpError(400, err.message, "invalid_request");
+    throw err;
+  }
+  const models = await availableModels();
+  const requested = requestedModel(body, models);
+  if (!models.some((m) => m.id === requested)) throw new HttpError(400, "That model is no longer available. Pick another model.", "invalid_model");
+  const fallback = body.allowFallback === true;
+  const budget = await fallbackBudget(fallback);
+  const outputs = { ...resume.outputs };
+  const temperature = clamp(body.temperature, 0, 2, 0.6);
+  const topP = clamp(body.topP, 0.01, 1, 0.95);
+
+  const s = openStream(res, release);
+  try {
+    for (let i = resume.start; i < AGENTS.length; i++) {
+      const agent = AGENTS[i];
+      const request = { messages: agentMessages(i, profile, outputs), system: agent.system, maxTokens: agent.maxTokens, thinking: body.thinking, temperature, topP };
+      const { decision, order } = planOrder(models, requested, fallback, request, budget);
+      const emit = (event) => s.write({ ...event, agent: agent.id });
+      const result = await runAttempts(s, {
+        models,
+        order,
+        fallback,
+        tier: agent.tier,
+        request,
+        emit,
+        onStart: ({ model, provider, entry, reply, fallbackFrom }) => {
+          const route = { mode: "manual", provider: provider.label, model: model.label, task: agent.id, reason: reasonFor(decision, entry, { fallbackFrom, manual: true }), fallbackFrom };
+          emit({ type: "start", model: model.id, maxTokens: reply.maxTokens, limitSeconds: Math.floor(s.limitMs / 1000), route });
+        },
+      });
+      if (!result.ok) {
+        if (result.error) failStream(s, result.error, { agent: agent.id });
+        return;
+      }
+      if (!result.text.trim()) return failStream(s, new HttpError(502, `The ${agent.name} returned an empty result. Try again or pick another model.`, "empty_response"), { agent: agent.id });
+      outputs[agent.id] = result.text;
+      emit({ type: "agent-done", finishReason: result.finishReason });
     }
+    s.write({ type: "done", finishReason: "stop" });
+  } finally {
+    await s.end();
   }
 }
 
@@ -532,6 +654,7 @@ const ROUTES = {
   "GET /api/health": (req, res, url) => healthRoute(res, url.searchParams.has("fresh")),
   "GET /api/models": (req, res) => modelsRoute(res),
   "POST /api/chat": (req, res) => chat(req, res),
+  "POST /api/career": (req, res) => career(req, res),
 };
 
 const KNOWN_PATHS = new Set(Object.keys(ROUTES).map((k) => k.split(" ")[1]));

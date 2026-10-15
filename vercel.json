@@ -9,6 +9,10 @@
       "maxDuration": 300,
       "supportsCancellation": true
     },
+    "api/career.mjs": {
+      "maxDuration": 300,
+      "supportsCancellation": true
+    },
     "api/models.mjs": {
       "maxDuration": 10
     },

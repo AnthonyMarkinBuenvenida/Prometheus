@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { CareerView } from "./components/CareerView";
 import { ChatView } from "./components/ChatView";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Composer } from "./components/Composer";
@@ -8,8 +9,9 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { ConfirmProvider } from "./components/ui/Dialog";
 import { useMediaQuery } from "./hooks/useMediaQuery";
+import { CareerProvider } from "./state/career";
 import { ChatProvider, useChat } from "./state/chat";
-import { ConversationsProvider } from "./state/conversations";
+import { ConversationsProvider, useConversations } from "./state/conversations";
 import { DraftProvider } from "./state/draft";
 import { ServerProvider } from "./state/server";
 import { SettingsProvider, useSettings } from "./state/settings";
@@ -19,6 +21,23 @@ import "./App.css";
 // Breakpoints: sidebar is inline from 1024px, the generation panel from 1280px.
 const DESKTOP = "(min-width: 1024px)";
 const WIDE = "(min-width: 1280px)";
+
+// Memoized without props: the chat view subscribes to conversations itself, so the composer doesn't
+// re-render on every streamed frame when MainContent does.
+const ChatMain = memo(function ChatMain() {
+  return (
+    <>
+      <ChatView />
+      <Composer />
+    </>
+  );
+});
+
+/** Chat, or the Career Guidance Factory (its form, or a roadmap conversation). */
+function MainContent() {
+  const { active, careerForm } = useConversations();
+  return careerForm || active?.kind === "career" ? <CareerView /> : <ChatMain />;
+}
 
 function Shell() {
   const isDesktop = useMediaQuery(DESKTOP);
@@ -99,8 +118,7 @@ function Shell() {
       />
       <main className="workspace">
         <Header showSidebarButton={!isDesktop} onOpenSidebar={() => setDrawerOpen(true)} panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} />
-        <ChatView />
-        <Composer />
+        <MainContent />
       </main>
       <ControlPanel open={panelOpen} overlay={panelOverlay} onClose={() => setPanelOpen(false)} />
       <div
@@ -146,7 +164,9 @@ export function App() {
               <WithConversations>
                 <DraftProvider>
                   <ChatProvider>
-                    <Shell />
+                    <CareerProvider>
+                      <Shell />
+                    </CareerProvider>
                   </ChatProvider>
                 </DraftProvider>
               </WithConversations>

@@ -1,6 +1,8 @@
 import type { Conversation } from "../types";
+import { careerToMarkdown } from "./career";
 
 export function conversationToMarkdown(c: Conversation, modelLabel: (id?: string) => string): string {
+  if (c.career) return careerToMarkdown(c, modelLabel);
   const lines = [`# ${c.title}`, "", `_Exported from Prometheus · ${new Date(c.updatedAt).toLocaleString()}_`, ""];
   for (const m of c.messages) {
     if (m.role === "user") {

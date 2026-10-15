@@ -8,7 +8,7 @@ A public demo of a workspace-style AI chat app powered by the **Google Gemini AP
 
 ```
 Browser ──HTTPS──▶ server.ts (Express) ─┬─ React SPA (Vite middleware in dev, dist/ in production)
-                                        └─ /api/{chat,models,health} → server/api.mjs ─┬─▶ Gemini API (server/providers/gemini.mjs, @google/genai)
+                                        └─ /api/{chat,career,models,health} → server/api.mjs ─┬─▶ Gemini API (server/providers/gemini.mjs, @google/genai)
                                                                           ├─▶ OpenRouter (server/providers/openrouter.mjs)
                                                                           └─▶ Postgres (optional: global rate-limit counters)
 ```
@@ -47,6 +47,7 @@ Without `DATABASE_URL`, rate limits live in process memory. To run the Postgres 
 
 ## Features
 
+- **Career Guidance Factory**: four AI agents (Skills → Career → Learning → Job Matching) turn a user's skills, interests and goals into a personalized career and learning roadmap, streamed agent by agent, with course and job search links (no extra API keys). Roadmaps are saved like chats (search, rename, export Markdown) and can resume from a failed agent. See docs/API.md
 - Streaming chat with stop, regenerate, retry, edit-and-resend, and **Continue** when a response hits the output or time limit
 - **You choose the model** — the default is Gemini 3.6 Flash (`DEFAULT_MODEL` to change it). Automatic per-message model selection was removed (2026-10-15) because it kept landing on overloaded Gemini models. The opt-in setting *Fall back if my chosen model fails* (off by default) lets another available model answer when the chosen one is busy — never after answer text has started (docs/ROUTING.md)
 - Model picker grouped by provider, discovered from the providers' live catalogs (currently 6 Gemini and 6 free OpenRouter models), with a *Busy* badge on models that recently failed; optional routing-details view for developers
