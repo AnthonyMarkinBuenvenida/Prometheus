@@ -134,7 +134,7 @@ function ChatTab() {
       />
       <Switch
         label="Fall back if my chosen model fails"
-        description="When you pick a model yourself and it's unavailable, let Auto answer with another model instead of showing an error."
+        description="When your chosen model is busy or unavailable, let another available model answer instead of showing an error. Off by default."
         checked={settings.manualFallback}
         onChange={(manualFallback) => update({ manualFallback })}
       />
@@ -177,14 +177,14 @@ function DataTab() {
           {health === "checking" ? "Checking…" : "Re-check"}
         </button>
       </Row>
-      <Row label="Providers" description={`${[...new Set(models.map((m) => m.provider))].join(" and ")} · ${models.length} models, discovered from the providers' live catalogs. Auto picks one per message. API keys stay on the server and are never sent to this browser.`} />
+      <Row label="Providers" description={`${[...new Set(models.map((m) => m.provider))].join(" and ")} · ${models.length} models, discovered from the providers' live catalogs. You choose the model. API keys stay on the server and are never sent to this browser.`} />
       <Row label="Export conversations" description={`Download all ${conversations.length} conversations as JSON.`}>
         <button
           type="button"
           className="btn btn-secondary btn-sm"
           disabled={conversations.length === 0}
           onClick={() => {
-            downloadFile(`hivemind-export-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(conversations, null, 2), "application/json");
+            downloadFile(`prometheus-export-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(conversations, null, 2), "application/json");
             toast("Export downloaded", "success");
           }}
         >

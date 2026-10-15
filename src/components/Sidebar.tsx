@@ -86,7 +86,7 @@ export function Sidebar({ mode, open, onToggle, onNavigate, onOpenSettings, onSe
         <div className="brand">
           <Logo size={28} />
           <div className="brand-text">
-            <span className="brand-name">HiveMind</span>
+            <span className="brand-name">Prometheus</span>
             <span className="brand-tag">AI Factory</span>
           </div>
         </div>

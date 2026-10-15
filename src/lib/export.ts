@@ -1,7 +1,7 @@
 import type { Conversation } from "../types";
 
 export function conversationToMarkdown(c: Conversation, modelLabel: (id?: string) => string): string {
-  const lines = [`# ${c.title}`, "", `_Exported from HiveMind · ${new Date(c.updatedAt).toLocaleString()}_`, ""];
+  const lines = [`# ${c.title}`, "", `_Exported from Prometheus · ${new Date(c.updatedAt).toLocaleString()}_`, ""];
   for (const m of c.messages) {
     if (m.role === "user") {
       lines.push("## You", "");

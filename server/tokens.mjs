@@ -1,9 +1,9 @@
-// Output-token limits. The app targets up to 50,000 output tokens (MAX_OUTPUT_TOKENS), but never
+// Output-token limits. The app targets up to 300,000 output tokens (MAX_OUTPUT_TOKENS), but never
 // more than the model/API accepts, and never more than fits in the model's context window
 // after the prompt. If Gemini still rejects the value, parseLimitFromError() finds the real
 // ceiling in its message so the request can be retried once instead of failing.
 
-export const DEFAULT_OUTPUT_CAP = 50_000;
+export const DEFAULT_OUTPUT_CAP = 300_000;
 export const MIN_OUTPUT_TOKENS = 256;
 const PROMPT_CHARS_PER_TOKEN = 3; // conservative (real text averages ~4 chars/token)
 const CONTEXT_MARGIN = 256;

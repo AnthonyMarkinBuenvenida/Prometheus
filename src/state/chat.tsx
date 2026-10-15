@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState, type
 import { ApiError, CONTINUE_PROMPT, streamChat, toApiContent, type ChatRequest } from "../lib/api";
 import { preloadRenderers } from "../lib/renderers";
 import { titleFrom, uid } from "../lib/util";
-import { AUTO_MODEL_ID, type AttachedFile, type Message, type ModelInfo } from "../types";
+import type { AttachedFile, Message, ModelInfo } from "../types";
 import { useConversationActions, type MessagePatch } from "./conversations";
 import { useDraftActions } from "./draft";
 import { useServer } from "./server";
@@ -17,7 +17,7 @@ interface ChatContextValue {
   streaming: Streaming | null;
   send: (text: string, files: AttachedFile[]) => boolean;
   stop: () => void;
-  /** Re-runs a reply; `model` overrides the active model (e.g. "Switch to Auto"). */
+  /** Re-runs a reply; `model` overrides the active model. */
   regenerate: (conversationId: string, assistantMessageId: string, model?: ModelInfo) => void;
   editAndResend: (conversationId: string, userMessageId: string, text: string) => void;
   newChat: () => void;
@@ -82,7 +82,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       let streamErrorCode: string | undefined;
       let finishReason: string | null = null;
       const settings = settingsRef.current;
-      const previousModel = [...history].reverse().find((m) => m.role === "assistant" && m.content && m.model && m.model !== AUTO_MODEL_ID)?.model;
+      const previousModel = [...history].reverse().find((m) => m.role === "assistant" && m.content && m.model)?.model;
       try {
         await streamChat(
           {
@@ -93,7 +93,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             topP: settings.topP,
             maxTokens: Math.min(settings.maxTokens, model.maxOutput),
             thinking: model.reasoning === "toggle" ? settings.thinking : true,
-            allowFallback: model.id !== AUTO_MODEL_ID && settings.manualFallback,
+            allowFallback: settings.manualFallback,
             debug: settings.showRouting || undefined,
             continuation: history.at(-1)?.content === CONTINUE_PROMPT || undefined,
             previousModel,

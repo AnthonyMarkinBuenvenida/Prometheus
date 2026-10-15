@@ -57,7 +57,7 @@ let budgetCache = null;
 const headers = (key) => ({
   Authorization: `Bearer ${key}`,
   "Content-Type": "application/json",
-  "X-Title": "HiveMind", // app name in OpenRouter's activity log
+  "X-Title": "Prometheus", // app name in OpenRouter's activity log
 });
 
 async function fail(response) {

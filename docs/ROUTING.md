@@ -1,9 +1,11 @@
-# Automatic model routing
+# Model routing and fallback
 
-HiveMind picks a model for every message in **Auto** mode (the default). Users can still pick a model manually.
+**There is no automatic model selection.** Auto mode (picking a model per message) was removed on 2026-10-15 at the user's request, because it kept landing on overloaded Gemini models. The user chooses the model; the default is `DEFAULT_MODEL`, else `gemini-3.6-flash`. A request with no model — or `"auto"` from a page loaded before the change — gets the default model.
+
+The router below is still used for two things: the **thinking effort** (from the task's difficulty) and, only when the user turns on *Fall back if my chosen model fails* (off by default), **ranking the other models to try** if the chosen one fails. Sections describing selection apply to that fallback ranking.
 
 ```
-Browser ──▶ POST /api/chat { model: "auto" | <id>, … }
+Browser ──▶ POST /api/chat { model: <id>, allowFallback?, … }
               │
               ▼
         server/api.mjs ── streams, timers, failover loop, SSE to the browser
@@ -63,7 +65,7 @@ Bonuses: +0.03 reasoning support for reasoning-heavy tasks, +0.02 when the model
 
 ## 5. Failover (`server/api.mjs`)
 
-Candidates are tried in score order, at most `ROUTER_MAX_ATTEMPTS` (3) per request, never the same model twice. Each attempt has its own abort controller and a first-token timeout (`ROUTER_ATTEMPT_TIMEOUT_SECONDS`, 45 s in Auto); the request-wide queue limit (`UPSTREAM_QUEUE_TIMEOUT_SECONDS`) still applies.
+Candidates are tried in score order, at most `ROUTER_MAX_ATTEMPTS` (3) per request, never the same model twice. Each attempt has its own abort controller and a first-token timeout (`ROUTER_ATTEMPT_TIMEOUT_SECONDS`, 45 s when fallback is on); the request-wide queue limit (`UPSTREAM_QUEUE_TIMEOUT_SECONDS`) still applies.
 
 - **Failover boundary — never mix two models in one reply.** Each attempt is in one of four states:
 
@@ -89,11 +91,11 @@ On serverless hosts each instance learns on its own and starts fresh after a col
 
 ## 7. Manual mode
 
-A chosen model is used as-is: no silent replacement. If it fails, the error offers **Switch to Auto** (re-runs the message with the router). The setting *Fall back if my chosen model fails* (`allowFallback`) lets the router continue with other models; the reply then says the chosen model was unavailable.
+A chosen model is used as-is: no silent replacement. If it fails, the error offers **Retry**. The setting *Fall back if my chosen model fails* (`allowFallback`, off by default) lets the router continue with other models; the reply then says the chosen model was unavailable.
 
 ## 8. What users see
 
-Under each Auto reply: the model that answered and a small **Auto · Provider** chip that expands to one sentence — why that model (only claims "highest benchmark" when true) and which models were tried first. *Show routing details* (Settings → Chat, developer view) adds the full decision:
+When a fallback model answered: the model that answered and a small provider chip with a "fallback" flag that expands to one sentence — which model was unavailable and which answered instead. *Show routing details* (Settings → Chat, developer view) adds the full decision:
 
 ```
 Request

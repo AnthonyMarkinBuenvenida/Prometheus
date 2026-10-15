@@ -53,5 +53,5 @@ if (production) {
 }
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`HiveMind ${production ? "production" : "dev"} server on http://localhost:${PORT}`);
+  console.log(`Prometheus ${production ? "production" : "dev"} server on http://localhost:${PORT}`);
 });

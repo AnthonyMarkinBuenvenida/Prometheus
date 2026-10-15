@@ -23,7 +23,7 @@ async function errorFrom(res: Response): Promise<ApiError> {
 }
 
 function networkError(): ApiError {
-  return new ApiError("Couldn't reach the HiveMind server. Check that it's running and you're online.", 0, "network");
+  return new ApiError("Couldn't reach the Prometheus server. Check that it's running and you're online.", 0, "network");
 }
 
 /** fetch() for /api routes: maps network failures consistently. */
@@ -49,10 +49,10 @@ export async function fetchModels(): Promise<{ models: ModelInfo[]; defaultModel
 export async function fetchHealth(fresh = false): Promise<{ status: Exclude<HealthStatus, "checking">; message: string }> {
   try {
     const res = await apiFetch(fresh ? "/api/health?fresh" : "/api/health");
-    if (!res.ok) return { status: "unreachable", message: "The HiveMind server returned an error." };
+    if (!res.ok) return { status: "unreachable", message: "The Prometheus server returned an error." };
     return await res.json();
   } catch {
-    return { status: "unreachable", message: "Couldn't reach the HiveMind server." };
+    return { status: "unreachable", message: "Couldn't reach the Prometheus server." };
   }
 }
 
@@ -67,7 +67,7 @@ export function toApiContent(message: Message): string {
 export const CONTINUE_PROMPT = "Continue exactly where you stopped. Do not repeat anything you already wrote.";
 
 export interface ChatRequest {
-  /** A model id, or "auto" for the router. */
+  /** The chosen model's id. */
   model: string;
   messages: { role: "user" | "assistant"; content: string }[];
   system?: string;

@@ -12,10 +12,10 @@ const short = (n: number) => `${Math.round(n / 1000)}K`;
 
 export function ControlPanel({ open, overlay, onClose }: { open: boolean; overlay: boolean; onClose: () => void }) {
   const { settings, update } = useSettings();
-  const { activeModel, isAuto, limits } = useServer();
+  const { activeModel, limits } = useServer();
   if (!open && !overlay) return null;
 
-  // The server reports min(50K app cap, verified model maximum); never offer more than that.
+  // The server reports min(300K app cap, verified model maximum); never offer more than that.
   const maxOut = activeModel?.maxOutput ?? 8_000;
   const maxTokens = Math.min(settings.maxTokens, maxOut);
   const presets = OUTPUT_PRESETS.filter((p) => p <= maxOut);
@@ -50,9 +50,7 @@ export function ControlPanel({ open, overlay, onClose }: { open: boolean; overla
           <div className="panel-model">
             <span className="panel-model-label">{activeModel.label}</span>
             <span className="panel-model-meta">
-              {isAuto
-                ? `Chooses per message · up to ${activeModel.maxOutput.toLocaleString()} output tokens (lowered automatically for models that support less)`
-                : `${activeModel.vendor} · up to ${activeModel.maxOutput.toLocaleString()} output tokens`}
+              {activeModel.vendor} · up to {activeModel.maxOutput.toLocaleString()} output tokens
             </span>
           </div>
         )}

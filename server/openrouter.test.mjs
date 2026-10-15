@@ -78,7 +78,7 @@ describe("chat against OpenRouter", () => {
     const { path, auth, title, body } = calls[0];
     assert.equal(path, "/api/v1/chat/completions");
     assert.equal(auth, "Bearer sk-or-test-not-real");
-    assert.equal(title, "HiveMind");
+    assert.equal(title, "Prometheus");
     assert.deepEqual(body.messages, [
       { role: "system", content: "Be brief." },
       { role: "user", content: "a" },

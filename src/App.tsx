@@ -127,7 +127,7 @@ function CrashScreen() {
   return (
     <div className="crash" role="alert">
       <h1>Something went wrong</h1>
-      <p>HiveMind hit an unexpected error. Your chats are saved in this browser.</p>
+      <p>Prometheus hit an unexpected error. Your chats are saved in this browser.</p>
       <button type="button" className="btn btn-primary" onClick={() => location.reload()}>
         Reload
       </button>

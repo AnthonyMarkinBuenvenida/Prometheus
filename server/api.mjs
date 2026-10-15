@@ -1,6 +1,6 @@
 // Server-side API layer — the only code that sees the provider keys (GEMINI_API_KEY, OPENROUTER_*).
 // Runs inside server.ts (Express: local dev, Google AI Studio, Cloud Run) and as Vercel
-// functions (api/*.mjs). HiveMind is a public demo: there is no sign-in; abuse protection is
+// functions (api/*.mjs). Prometheus is a public demo: there is no sign-in; abuse protection is
 // rate limiting (server/limits.mjs), request limits and validation.
 //
 //   registry.mjs        which models exist (live provider catalogs, normalized)
@@ -23,6 +23,7 @@ import * as health from "./router/health.mjs";
 import { effortFor, MAX_ATTEMPTS, plan, reasonFor } from "./router/route.mjs";
 import { modelOutputLimit, outputCap, planMaxTokens } from "./tokens.mjs";
 
+/** Model id sent by pages from before automatic selection was removed; treated as "the default model". */
 export const AUTO = "auto";
 const PROVIDERS = { gemini: geminiProvider, openrouter: openrouterProvider };
 
@@ -75,9 +76,15 @@ async function availableModels() {
   return ready.length ? ready : models;
 }
 
+// Used when DEFAULT_MODEL isn't set (or names a model that isn't available). Gemini 3.6 Flash was the
+// most dependable mid-size model in production testing (2026-10).
+const PREFERRED_DEFAULT = "gemini-3.6-flash";
+
+/** The model used when a request names none: DEFAULT_MODEL, else PREFERRED_DEFAULT, else the first listed. */
 function defaultModelId(models) {
   const configured = process.env.DEFAULT_MODEL;
-  return configured && (configured === AUTO || models.some((m) => m.id === configured)) ? configured : AUTO;
+  if (configured && models.some((m) => m.id === configured)) return configured;
+  return models.some((m) => m.id === PREFERRED_DEFAULT) ? PREFERRED_DEFAULT : models[0]?.id;
 }
 
 function sendJson(res, status, body, headers = {}) {
@@ -287,27 +294,21 @@ async function streamCompletion(req, res, release) {
   const system = typeof body.system === "string" ? body.system.trim().slice(0, MAX_SYSTEM_CHARS) : "";
   const promptChars = system.length + messages.reduce((n, m) => n + m.content.length, 0);
   const models = await availableModels();
-  const auto = !body.model || body.model === AUTO;
-  const manualFallback = !auto && body.allowFallback === true;
+  // There is no automatic model selection (removed 2026-10-15: it kept landing on overloaded Gemini
+  // models). No model, or "auto" from a page loaded before that change, means the default model.
+  const requested = !body.model || body.model === AUTO ? defaultModelId(models) : body.model;
+  const manualFallback = body.allowFallback === true;
 
-  // ----- Decide which models to try, best first -----
+  // ----- Decide which models to try -----
   const budget = {};
-  if (openrouterProvider.configured() && auto) budget.openrouter = await openrouterProvider.budget();
+  if (openrouterProvider.configured() && manualFallback) budget.openrouter = await openrouterProvider.budget();
   const routeReq = { messages, system, maxTokens: body.maxTokens, thinking: body.thinking, continuation: body.continuation === true, previousModel: typeof body.previousModel === "string" ? body.previousModel : undefined };
   const decision = plan(routeReq, models, { budget });
-  let order;
-  if (auto) {
-    order = decision.candidates;
-  } else {
-    const chosen = models.find((m) => m.id === body.model);
-    if (!chosen) throw new HttpError(400, "That model is no longer available. Pick another model or switch to Auto.", "invalid_model");
-    const entry = decision.candidates.find((c) => c.model.id === chosen.id) ?? { model: chosen, score: null, parts: {}, bonus: [] };
-    order = [entry, ...(manualFallback ? decision.candidates.filter((c) => c.model.id !== chosen.id) : [])];
-  }
-  if (!order.length) {
-    const why = decision.excluded.map((e) => e.reason)[0];
-    throw new HttpError(413, `No available model can handle this request${why ? ` (${why})` : ""}. Start a new chat or shorten the conversation.`, "too_long");
-  }
+  // The chosen model first; with "fall back" on, the router's ranking supplies the other models to try.
+  const chosen = models.find((m) => m.id === requested);
+  if (!chosen) throw new HttpError(400, "That model is no longer available. Pick another model.", "invalid_model");
+  const entry = decision.candidates.find((c) => c.model.id === chosen.id) ?? { model: chosen, score: null, parts: {}, bonus: [] };
+  const order = [entry, ...(manualFallback ? decision.candidates.filter((c) => c.model.id !== chosen.id) : [])];
 
   // ----- Timers shared by all attempts -----
   const limitMs = streamLimitMs();
@@ -332,7 +333,7 @@ async function streamCompletion(req, res, release) {
   //   C  answer text started    → no fallback: an error ends the reply (never mix two models' answers)
   //   D  finished               → done
   const attempts = [];
-  const maxAttempts = auto || manualFallback ? MAX_ATTEMPTS() : 1;
+  const maxAttempts = manualFallback ? MAX_ATTEMPTS() : 1;
   const excludedProviders = new Set(); // provider-wide failures (bad key, unreachable)
   const excludedFree = new Set(); // providers whose shared free quota ran out
   const streamEnd = Date.now() + limitMs - 15_000; // latest time a fallback attempt may still start
@@ -401,7 +402,7 @@ async function streamCompletion(req, res, release) {
           ctrl.abort();
         }, ms);
       };
-      arm(auto || manualFallback ? Math.min(attemptTimeoutMs(), remaining) : remaining, "timeout");
+      arm(manualFallback ? Math.min(attemptTimeoutMs(), remaining) : remaining, "timeout");
       const record = { model: model.id, provider: model.provider, ok: false, ms: 0 };
       attempts.push(record);
       let phase = "A";
@@ -429,16 +430,16 @@ async function streamCompletion(req, res, release) {
 
         const fallbackFrom = attempts.filter((a) => !a.ok).map((a) => label(a.model));
         const route = {
-          mode: auto ? AUTO : "manual",
+          mode: "manual",
           provider: provider.label,
           model: model.label,
           task: decision.task.type,
-          reason: reasonFor(decision, entry, { fallbackFrom, manual: !auto }),
+          reason: reasonFor(decision, entry, { fallbackFrom, manual: true }),
           fallbackFrom,
         };
         sendHeaders();
         const start = { type: "start", model: model.id, maxTokens: reply.maxTokens, limitSeconds: Math.floor(limitMs / 1000), route };
-        if (body.debug === true) start.debug = debugInfo(decision, entry, attempts, order, auto);
+        if (body.debug === true) start.debug = debugInfo(decision, entry, attempts, order);
         writeEvent(res, start);
 
         const handle = (event) => {
@@ -514,9 +515,9 @@ async function streamCompletion(req, res, release) {
 }
 
 /** Routing details for the developer view: decisions and outcomes only, never keys or message text. */
-function debugInfo(decision, entry, attempts, order, auto) {
+function debugInfo(decision, entry, attempts, order) {
   return {
-    mode: auto ? AUTO : "manual",
+    mode: "manual",
     task: { type: decision.task.type, tier: decision.task.tier, signals: decision.task.signals },
     requirements: decision.need,
     candidates: decision.candidates.slice(0, 8).map((c) => ({ model: c.model.id, provider: c.model.provider, score: c.score, ...c.parts, bonus: c.bonus })),

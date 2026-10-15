@@ -3,7 +3,7 @@ import { modKey } from "../lib/util";
 import { useChat } from "../state/chat";
 import { useServer } from "../state/server";
 import { useSettings } from "../state/settings";
-import { AUTO_MODEL_ID, type ModelInfo } from "../types";
+import type { ModelInfo } from "../types";
 import { Icon } from "./Icon";
 import { focusFirstItem, menuKeyDown, Popover } from "./ui/Popover";
 import "./Header.css";
@@ -22,7 +22,7 @@ function groupByProvider(models: ModelInfo[]): [string, ModelInfo[]][] {
 }
 
 function ModelPicker() {
-  const { models, modelsStatus, modelsError, reloadModels, activeModel, isAuto } = useServer();
+  const { models, modelsStatus, modelsError, reloadModels, activeModel } = useServer();
   const { update } = useSettings();
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement>(null);
@@ -69,35 +69,13 @@ function ModelPicker() {
       <Popover open={open} onClose={close} anchorRef={anchorRef} width={340} className="model-popover">
         <div className="model-menu-head">Model</div>
         <div ref={listRef} role="menu" aria-label="Choose a model" className="menu" onKeyDown={menuKeyDown}>
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={isAuto}
-            className="model-option model-option-auto"
-            onClick={() => {
-              update({ model: AUTO_MODEL_ID });
-              setOpen(false);
-              anchorRef.current?.focus();
-            }}
-          >
-            <span className="model-option-main">
-              <span className="model-option-title">
-                Auto — Best available
-                <span className="model-badge">Recommended</span>
-              </span>
-              <span className="model-option-desc">Picks a model for each message from what it needs, benchmarks and live availability.</span>
-            </span>
-            <span className="model-check" aria-hidden="true">
-              {isAuto && <Icon name="check" size={16} />}
-            </span>
-          </button>
           {groupByProvider(models).map(([provider, group]) => (
             <div key={provider} role="group" aria-label={provider}>
               <div className="model-group-head" aria-hidden="true">
                 {multipleProviders ? provider : "Choose a model"}
               </div>
               {group.map((m) => {
-                const selected = !isAuto && m.id === activeModel.id;
+                const selected = m.id === activeModel.id;
                 const badge = REASONING_BADGE[m.reasoning];
                 return (
                   <button
@@ -118,7 +96,7 @@ function ModelPicker() {
                         <span className="model-vendor">{m.vendor}</span>
                         {badge && <span className="model-badge">{badge}</span>}
                         {m.status === "cooling" && (
-                          <span className="model-badge model-badge-busy" title="Recently failed or rate-limited; Auto skips it for a few minutes.">
+                          <span className="model-badge model-badge-busy" title="Recently failed or rate-limited; it may be slow or unavailable for a few minutes.">
                             Busy
                           </span>
                         )}

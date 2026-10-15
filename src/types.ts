@@ -10,7 +10,7 @@ export interface ModelInfo {
   provider: string;
   description: string;
   reasoning: ReasoningMode;
-  /** Largest output this deployment allows for the model: min(50K app cap, verified API max). */
+  /** Largest output this deployment allows for the model: min(300K app cap, verified API max). */
   maxOutput: number;
   /** Total prompt + output tokens, when the model enforces one (else null). */
   contextWindow: number | null;
@@ -20,12 +20,9 @@ export interface ModelInfo {
   status?: "ok" | "degraded" | "cooling";
 }
 
-/** The automatic router, shown in the model menu like a model. */
-export const AUTO_MODEL_ID = "auto";
-
 /** How a reply was routed (from the stream's start event). */
 export interface RouteInfo {
-  mode: "auto" | "manual";
+  mode: "manual";
   provider: string;
   model: string;
   task: string;

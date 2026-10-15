@@ -139,8 +139,9 @@ export function Logo({ size = 28 }: { size?: number }) {
       {/* Colors come from theme tokens (CSS variables only work via style, not SVG attributes). */}
       <rect width="32" height="32" rx="9" style={{ fill: "var(--logo-bg)" }} />
       <rect x="0.5" y="0.5" width="31" height="31" rx="8.5" fill="none" style={{ stroke: "var(--logo-border)" }} />
-      <path d="M16 6.8l8 4.6v9.2l-8 4.6-8-4.6v-9.2z" fill="none" strokeWidth="2" strokeLinejoin="round" style={{ stroke: "var(--logo-mark)" }} />
-      <path d="M16 12.2l3.3 1.9v3.8L16 19.8l-3.3-1.9v-3.8z" style={{ fill: "var(--logo-mark)" }} />
+      {/* Prometheus "Flame": the gift of fire. The inner cut is drawn in the tile color, so one accent works in every theme. */}
+      <path d="M16 5.2c3.1 3.2 7 7.4 7 12.6 0 4.6-3.1 8-7 8s-7-3.4-7-8c0-3.6 2.2-6.1 3.6-7.5.1 2.3 1 3.9 2.3 4.6-.3-3.7.3-6.9 1.1-9.7z" style={{ fill: "var(--logo-mark)" }} />
+      <path d="M16 24.6c-1.9 0-3.2-1.5-3.2-3.3 0-2 1.6-3.3 2.6-4.8.3 1.6 1.2 2.5 2.2 2.8 1 .4 1.6 1.3 1.6 2.3 0 1.7-1.4 3-3.2 3z" style={{ fill: "var(--logo-bg)" }} />
     </svg>
   );
 }

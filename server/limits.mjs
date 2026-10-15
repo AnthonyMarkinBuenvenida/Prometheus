@@ -71,7 +71,7 @@ export function createMemoryStore(now = () => Date.now()) {
 }
 
 const UPSERT = `
-INSERT INTO hivemind_limits AS l (key, count, expires_at)
+INSERT INTO prometheus_limits AS l (key, count, expires_at)
 VALUES ($1, 1, now() + make_interval(secs => $2::double precision / 1000))
 ON CONFLICT (key) DO UPDATE SET
   count = CASE WHEN l.expires_at <= now() THEN 1 ELSE l.count + 1 END,
@@ -84,7 +84,7 @@ export function createPostgresStore(url) {
   let ready = null;
   const ensureTable = () =>
     (ready ??= sql
-      .query("CREATE TABLE IF NOT EXISTS hivemind_limits (key text PRIMARY KEY, count integer NOT NULL, expires_at timestamptz NOT NULL)")
+      .query("CREATE TABLE IF NOT EXISTS prometheus_limits (key text PRIMARY KEY, count integer NOT NULL, expires_at timestamptz NOT NULL)")
       .catch((err) => {
         ready = null; // retry on the next request
         throw err;
@@ -96,7 +96,7 @@ export function createPostgresStore(url) {
       await ensureTable();
       const rows = await sql.transaction(keys.map(({ key, windowMs }) => sql.query(UPSERT, [key, windowMs])));
       // Occasionally sweep long-expired rows so the table stays small.
-      if (Math.random() < 0.02) sql.query("DELETE FROM hivemind_limits WHERE expires_at < now() - interval '1 day'").catch(() => {});
+      if (Math.random() < 0.02) sql.query("DELETE FROM prometheus_limits WHERE expires_at < now() - interval '1 day'").catch(() => {});
       return rows.map(([r]) => ({ count: Number(r.count), resetAt: Number(r.reset_at) }));
     },
     /** One row per slot (`<key>/<uuid>`); live slots are rows that haven't expired. */
@@ -105,8 +105,8 @@ export function createPostgresStore(url) {
       const slotId = `${key}/${randomUUID()}`;
       const prefix = `${key.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`;
       const [, [r]] = await sql.transaction([
-        sql.query("INSERT INTO hivemind_limits (key, count, expires_at) VALUES ($1, 1, now() + make_interval(secs => $2::double precision / 1000))", [slotId, ttlMs]),
-        sql.query("SELECT count(*)::int AS n FROM hivemind_limits WHERE key LIKE $1 AND expires_at > now()", [prefix]),
+        sql.query("INSERT INTO prometheus_limits (key, count, expires_at) VALUES ($1, 1, now() + make_interval(secs => $2::double precision / 1000))", [slotId, ttlMs]),
+        sql.query("SELECT count(*)::int AS n FROM prometheus_limits WHERE key LIKE $1 AND expires_at > now()", [prefix]),
       ]);
       if (r.n > limit) {
         await this.release(slotId);
@@ -115,10 +115,10 @@ export function createPostgresStore(url) {
       return slotId;
     },
     async release(slotId) {
-      await sql.query("DELETE FROM hivemind_limits WHERE key = $1", [slotId]);
+      await sql.query("DELETE FROM prometheus_limits WHERE key = $1", [slotId]);
     },
     async renew(slotId, ttlMs) {
-      await sql.query("UPDATE hivemind_limits SET expires_at = now() + make_interval(secs => $2::double precision / 1000) WHERE key = $1", [slotId, ttlMs]);
+      await sql.query("UPDATE prometheus_limits SET expires_at = now() + make_interval(secs => $2::double precision / 1000) WHERE key = $1", [slotId, ttlMs]);
     },
   };
 }

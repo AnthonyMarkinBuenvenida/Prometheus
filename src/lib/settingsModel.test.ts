@@ -28,10 +28,11 @@ test("settings saved by older versions keep their values", () => {
   assert.equal(s.sidebarCollapsed, true);
 });
 
-test("Auto is the default model; a saved manual choice is kept", () => {
-  assert.equal(DEFAULT_SETTINGS.model, "auto");
-  assert.equal(normalizeSettings({ model: null }).model, "auto");
-  assert.equal(normalizeSettings({}).model, "auto");
+test("no saved model (or a saved 'auto') means the server's default; a saved choice is kept", () => {
+  assert.equal(DEFAULT_SETTINGS.model, null);
+  assert.equal(normalizeSettings({ model: null }).model, null);
+  assert.equal(normalizeSettings({}).model, null);
+  assert.equal(normalizeSettings({ model: "auto" }).model, null);
   assert.equal(normalizeSettings({ model: "gemini-3.8-flash" }).model, "gemini-3.8-flash");
   assert.equal(normalizeSettings({}).manualFallback, false);
 });

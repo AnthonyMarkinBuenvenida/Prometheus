@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { fetchHealth, fetchModels } from "../lib/api";
-import { AUTO_MODEL_ID, type DemoLimits, type HealthStatus, type ModelInfo } from "../types";
+import type { DemoLimits, HealthStatus, ModelInfo } from "../types";
 import { useSettings } from "./settings";
 
 interface ServerContextValue {
@@ -8,11 +8,8 @@ interface ServerContextValue {
   modelsStatus: "loading" | "ready" | "error";
   modelsError: string | null;
   reloadModels: () => void;
-  /** The model new messages are sent to: the Auto router (default) or the user's manual choice. */
+  /** The model new messages are sent to: the user's choice, or the server's default model. */
   activeModel: ModelInfo | null;
-  isAuto: boolean;
-  /** The Auto router as a model entry (null until models load). */
-  autoModel: ModelInfo | null;
   modelLabel: (id?: string) => string;
   /** Deployment limits from the server (null until models load). */
   limits: DemoLimits | null;
@@ -66,37 +63,18 @@ export function ServerProvider({ children }: { children: ReactNode }) {
     checkHealth(false);
   }, [reloadModels, checkHealth]);
 
-  // Auto behaves like a model whose capabilities are the best of the available ones.
-  const auto = useMemo<ModelInfo | null>(
-    () =>
-      models.length
-        ? {
-            id: AUTO_MODEL_ID,
-            label: "Auto",
-            vendor: "HiveMind",
-            provider: "the best available model",
-            description: "Picks the best available model for each message.",
-            reasoning: models.some((m) => m.reasoning === "toggle") ? "toggle" : "always",
-            maxOutput: Math.max(...models.map((m) => m.maxOutput)),
-            contextWindow: Math.max(...models.map((m) => m.contextWindow ?? 0)) || null,
-          }
-        : null,
-    [models],
-  );
-  // A saved manual model that no longer exists falls back to Auto.
-  const manual = settings.model && settings.model !== AUTO_MODEL_ID ? models.find((m) => m.id === settings.model) : undefined;
-  const fallbackDefault = defaultModel && defaultModel !== AUTO_MODEL_ID ? models.find((m) => m.id === defaultModel) : undefined;
-  const activeModel = manual ?? (settings.model === AUTO_MODEL_ID || !fallbackDefault ? auto : fallbackDefault) ?? null;
-  const isAuto = activeModel?.id === AUTO_MODEL_ID;
+  // The user's saved choice if it still exists, else the server's default model, else the first one.
+  // (A saved "auto" from before automatic selection was removed simply doesn't match a model.)
+  const activeModel = models.find((m) => m.id === settings.model) ?? models.find((m) => m.id === defaultModel) ?? models[0] ?? null;
 
   const modelLabel = useCallback(
-    (id?: string) => (id === AUTO_MODEL_ID ? "Auto" : (models.find((m) => m.id === id)?.label ?? id?.split("/").pop()?.replace(/:free$/, "") ?? "Assistant")),
+    (id?: string) => models.find((m) => m.id === id)?.label ?? id?.split("/").pop()?.replace(/:free$/, "") ?? "Assistant",
     [models],
   );
 
   const value = useMemo(
-    () => ({ models, modelsStatus, modelsError, reloadModels, activeModel, isAuto, autoModel: auto, modelLabel, limits, health, healthMessage, recheckHealth }),
-    [models, modelsStatus, modelsError, reloadModels, activeModel, isAuto, auto, modelLabel, limits, health, healthMessage, recheckHealth],
+    () => ({ models, modelsStatus, modelsError, reloadModels, activeModel, modelLabel, limits, health, healthMessage, recheckHealth }),
+    [models, modelsStatus, modelsError, reloadModels, activeModel, modelLabel, limits, health, healthMessage, recheckHealth],
   );
   return <ServerContext.Provider value={value}>{children}</ServerContext.Provider>;
 }

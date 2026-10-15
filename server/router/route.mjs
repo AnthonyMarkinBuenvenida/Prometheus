@@ -36,7 +36,7 @@ const round = (x) => Math.round(x * 1000) / 1000;
 
 /** Requirements derived from the request and its classification. */
 export function requirements(req, task) {
-  const outputTokens = Math.max(256, Math.min(Number(req.maxTokens) || 4096, Number(process.env.MAX_OUTPUT_TOKENS) || 50_000));
+  const outputTokens = Math.max(256, Math.min(Number(req.maxTokens) || 4096, Number(process.env.MAX_OUTPUT_TOKENS) || 300_000));
   return {
     promptTokens: task.promptTokens,
     outputTokens,

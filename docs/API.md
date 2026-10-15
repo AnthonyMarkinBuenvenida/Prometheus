@@ -9,14 +9,14 @@
 
 ### `GET /api/models`
 ```json
-{ "defaultModel": "auto", "models": [{ "id", "label", "vendor", "provider", "description", "reasoning", "vision", "free", "maxOutput", "contextWindow", "status" }],
-  "limits": { "outputCap": 50000, "streamSeconds": 285, "rateLimitScope": "global" } }
+{ "defaultModel": "gemini-3.6-flash", "models": [{ "id", "label", "vendor", "provider", "description", "reasoning", "vision", "free", "maxOutput", "contextWindow", "status" }],
+  "limits": { "outputCap": 300000, "streamSeconds": 285, "rateLimitScope": "global" } }
 ```
-The registry's models whose provider has a key (all of them when no key is set), by provider and strongest benchmark first. `provider` is the display name (`"Gemini API"`, `"OpenRouter"`); `status` is the router's runtime health (`ok` / `degraded` / `cooling`). `defaultModel` is `DEFAULT_MODEL` when it names a listed model, else `"auto"`. `maxOutput` is what this deployment allows for the model: `min(MAX_OUTPUT_TOKENS, model output limit)`. `rateLimitScope` is `per-instance` when no database is configured.
+The registry's models whose provider has a key (all of them when no key is set), by provider and strongest benchmark first. `provider` is the display name (`"Gemini API"`, `"OpenRouter"`); `status` is the router's runtime health (`ok` / `degraded` / `cooling`). `defaultModel` is `DEFAULT_MODEL` when it names a listed model, else `gemini-3.6-flash`, else the first listed model — never `"auto"` (automatic selection was removed). `maxOutput` is what this deployment allows for the model: `min(MAX_OUTPUT_TOKENS, model output limit)`. `rateLimitScope` is `per-instance` when no database is configured.
 
 ### `POST /api/chat`
 ```json
-{ "model": "auto", "messages": [{ "role": "user", "content": "…" }],
+{ "model": "gemini-3.6-flash", "messages": [{ "role": "user", "content": "…" }],
   "system": "optional, ≤ 8000 chars", "temperature": 0.6, "topP": 0.95, "maxTokens": 50000, "thinking": true }
 ```
 Validation failures return `{ error: { message, code } }` before streaming. Limits: 200 messages, 600k chars, 2 MB body; the last message must be a non-empty user turn.
@@ -25,7 +25,7 @@ On success: `text/event-stream`, one JSON object per `data:` frame:
 
 | Event | Payload |
 |---|---|
-| `start` | `{ model, maxTokens, limitSeconds, route, debug? }` — `model` is the model that answers (chosen by the router in Auto mode); `maxTokens` is what was actually sent (may be below the request); `route` = `{ mode, provider, model, task, reason, fallbackFrom }`; `debug` (only when the request has `debug: true`) = the full routing decision |
+| `start` | `{ model, maxTokens, limitSeconds, route, debug? }` — `model` is the model that answers (the chosen one, or a fallback when `allowFallback` is on); `maxTokens` is what was actually sent (may be below the request); `route` = `{ mode, provider, model, task, reason, fallbackFrom }`; `debug` (only when the request has `debug: true`) = the full routing decision |
 | `reset` | `{ message, code }` — the model failed after streaming only reasoning; discard everything received since the last `start` and show `message` until the next `start` (another model). Never sent after answer text |
 | `reasoning` | `{ text }` — reasoning delta (Gemini: thought-summary parts, `thought: true`; OpenRouter: `delta.reasoning`) |
 | `content` | `{ text }` — answer delta |
@@ -34,11 +34,11 @@ On success: `text/event-stream`, one JSON object per `data:` frame:
 | `error` | `{ message, code }` — mid-stream failure; the stream then ends |
 
 **Request mapping**
-- Router: `model: "auto"` (or omitted) routes per message; a model id is used as-is unless `allowFallback: true`. Optional `continuation` (the Continue button) and `previousModel` give the router conversation context. The reasoning effort comes from the task tier and the `thinking` flag (docs/ROUTING.md).
+- Model: the chosen id is used as-is. No model — or `"auto"`, sent by pages loaded before automatic selection was removed — means the default model. With `allowFallback: true` the router (docs/ROUTING.md) ranks other models to try if the chosen one fails; `continuation` and `previousModel` are accepted for that ranking. The reasoning effort comes from the task's difficulty and the `thinking` flag.
 - Gemini: `assistant` → role `model` (empty turns dropped), `system` → `systemInstruction`, `temperature`/`topP` clamped, `maxOutputTokens` planned as below, `thinkingConfig.includeThoughts: true` plus `thinkingLevel` from the effort (thinking off = the model's lowest level: `minimal` where supported, else `low`).
-- OpenRouter: OpenAI chat format (`system` first), `max_tokens`, `stream: true`, `X-Title: HiveMind`. Keys: `OPENROUTER_API_KEY`, then `OPENROUTER_API_KEY_BACKUP`, then `OPENROUTER_API_KEY_BACKUP_2` (a model may name its own first key with `keyEnv` in the registry overrides; none does by default). A key-specific failure (401, 402, a key/disabled 403, a 429 that isn't "rate-limited upstream") retries the request with the next key and benches the failed key (tried last) for 5 minutes. Health checks every key with `GET /key` and stays `ok` while any works, naming rejected keys in `message`. Effort is sent as `reasoning: { effort }` (verified on Qwen 3.8); thinking off on a `"toggle"` model sends `reasoning: { enabled: false }` (verified to remove reasoning on Nemotron 3 Super/Ultra and Qwen 3.8; it garbled North Mini Code's answer, so that model is `"always"`). `: OPENROUTER PROCESSING` comment lines keep the idle timer alive; a `{ error }` chunk or `finish_reason: "error"` ends the stream with an error.
+- OpenRouter: OpenAI chat format (`system` first), `max_tokens`, `stream: true`, `X-Title: Prometheus`. Keys: `OPENROUTER_API_KEY`, then `OPENROUTER_API_KEY_BACKUP`, then `OPENROUTER_API_KEY_BACKUP_2` (a model may name its own first key with `keyEnv` in the registry overrides; none does by default). A key-specific failure (401, 402, a key/disabled 403, a 429 that isn't "rate-limited upstream") retries the request with the next key and benches the failed key (tried last) for 5 minutes. Health checks every key with `GET /key` and stays `ok` while any works, naming rejected keys in `message`. Effort is sent as `reasoning: { effort }` (verified on Qwen 3.8); thinking off on a `"toggle"` model sends `reasoning: { enabled: false }` (verified to remove reasoning on Nemotron 3 Super/Ultra and Qwen 3.8; it garbled North Mini Code's answer, so that model is `"always"`). `: OPENROUTER PROCESSING` comment lines keep the idle timer alive; a `{ error }` chunk or `finish_reason: "error"` ends the stream with an error.
 
-**Output tokens** (`server/tokens.mjs`): the requested value is clamped to `[256, min(50 000, model.maxOutput)]` and to the context left after the prompt (estimated at 3 chars/token + 256 margin). Gemini only: one recoverable `400` is retried once: an output ceiling in the error message ("supported range is from 1 (inclusive) to N (exclusive)") lowers `maxOutputTokens`; an error mentioning thinking drops `thinkingLevel`.
+**Output tokens** (`server/tokens.mjs`): the requested value is clamped to `[256, min(300 000, model.maxOutput)]` and to the context left after the prompt (estimated at 3 chars/token + 256 margin). Gemini only: one recoverable `400` is retried once: an output ceiling in the error message ("supported range is from 1 (inclusive) to N (exclusive)") lowers `maxOutputTokens`; an error mentioning thinking drops `thinkingLevel`.
 
 **Timing**: a provider may take up to `UPSTREAM_QUEUE_TIMEOUT_SECONDS` (default 120, capped 30 s below the stream limit) to start before a 504 `upstream_timeout`; 60 s of mid-stream silence → `idle_timeout`; at the stream limit the stream is ended cleanly with `max_duration` (the UI shows "Paused at the time limit" + Continue). On Cloud Run (`K_SERVICE`) and Vercel the stream limit is `FUNCTION_MAX_DURATION` (300 = Cloud Run's default request timeout and `vercel.json` maxDuration) − 15 s = **285 s**; locally 10 minutes.
 
@@ -58,7 +58,7 @@ Applied to `POST /api/chat` **before the body is read** (invalid requests count 
 | Whole demo per day | 1,500 | `RATE_LIMIT_GLOBAL_PER_DAY` |
 | Concurrent responses per IP | 2 | `MAX_CONCURRENT_STREAMS` |
 
-Storage: with `DATABASE_URL`/`POSTGRES_URL`, counters live in the `hivemind_limits` table (created on first use; Neon serverless driver over HTTP) and are **global across instances** (Cloud Run, Vercel). Without it — or if the database errors — limits fall back to per-process memory (logged as `[limits] database unavailable`). Windows are fixed (count + expiry per key). Each concurrency slot is its own row holding a 30 s lease, renewed every 10 s while the response streams and deleted when it ends. A request that is cancelled or frozen can't run that cleanup (observed on Vercel), so its slot simply expires within 30 s.
+Storage: with `DATABASE_URL`/`POSTGRES_URL`, counters live in the `prometheus_limits` table (created on first use; Neon serverless driver over HTTP) and are **global across instances** (Cloud Run, Vercel). Without it — or if the database errors — limits fall back to per-process memory (logged as `[limits] database unavailable`). Windows are fixed (count + expiry per key). Each concurrency slot is its own row holding a 30 s lease, renewed every 10 s while the response streams and deleted when it ends. A request that is cancelled or frozen can't run that cleanup (observed on Vercel), so its slot simply expires within 30 s.
 
 Client IP: on Vercel (`VERCEL=1`) from `x-real-ip` / `x-forwarded-for`, which Vercel sets itself — verified that spoofed values don't change the identity. On Cloud Run (`K_SERVICE`) the **last** `x-forwarded-for` entry, which Google's front end appends (not yet verified against a live deployment). Elsewhere the socket address is used and forwarding headers are ignored.
 
@@ -79,4 +79,4 @@ Tests: `server/api.test.mjs`.
 
 ## Models and routing
 
-Models aren't a fixed list: `server/registry.mjs` discovers them from the providers' live catalogs, and `server/router/` picks one per message in Auto mode, with health tracking and failover. See **docs/ROUTING.md**.
+Models aren't a fixed list: `server/registry.mjs` discovers them from the providers' live catalogs. There is no automatic model selection; `server/router/` sets the thinking effort and, only when the user enables fallback, ranks other models to try, with health tracking. See **docs/ROUTING.md**.

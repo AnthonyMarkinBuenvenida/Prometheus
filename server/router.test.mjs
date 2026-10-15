@@ -148,7 +148,8 @@ describe("token limits", () => {
   for (const want of [4_000, 8_000, 16_000, 32_000, 50_000]) {
     test(`${want} requested → ${want} sent (within the model's 65,536)`, () => assert.equal(planMaxTokens(m, want, 100), want));
   }
-  test("above the 50K app cap → 50K", () => assert.equal(planMaxTokens(m, 200_000, 100), 50_000));
+  test("above the 300K app cap → 300K", () => assert.equal(planMaxTokens(synthetic("big", { maxOutput: 1_000_000, contextWindow: 2_000_000 }), 500_000, 100), 300_000));
+  test("above the model's own maximum → that maximum (Gemini 65,536)", () => assert.equal(planMaxTokens(m, 300_000, 100), 65_536));
   test("model-specific lower limit → reduced safely", () => assert.equal(planMaxTokens(synthetic("x", { maxOutput: 8_192 }), 50_000, 100), 8_192));
   test("long conversation → reduced to the context left", () => {
     const n = planMaxTokens(synthetic("x", { contextWindow: 128_000, maxOutput: 65_536 }), 50_000, 300_000);

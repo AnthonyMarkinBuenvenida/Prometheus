@@ -82,15 +82,15 @@ describe("output tokens", () => {
   const flash = MODELS[0];
   const small = { maxOutput: 65_536, contextWindow: 131_072 };
 
-  test("50K is offered when the model supports it", () => {
-    for (const m of MODELS) if (m.maxOutput >= 50_000) assert.equal(modelOutputLimit(m), 50_000, m.id);
+  test("each model offers min(300K app cap, its own maximum)", () => {
+    for (const m of MODELS) assert.equal(modelOutputLimit(m), Math.min(300_000, m.maxOutput), m.id);
   });
   test("falls back to the model maximum when it is below the cap", () => {
     assert.equal(modelOutputLimit({ maxOutput: 8192 }), 8192);
     assert.equal(planMaxTokens({ maxOutput: 8192, contextWindow: null }, 50_000, 100), 8192);
   });
   test("request is clamped to the cap and to the context left after the prompt", () => {
-    assert.equal(planMaxTokens(flash, 999_999, 100), 50_000);
+    assert.equal(planMaxTokens(flash, 999_999, 100), Math.min(300_000, flash.maxOutput));
     assert.equal(planMaxTokens(flash, 10, 100), 256);
     // 300k chars ≈ 100k tokens of prompt: only ~30.8k remain in a 131,072 context
     const n = planMaxTokens(small, 50_000, 300_000);
@@ -129,11 +129,11 @@ describe("API router (public demo)", () => {
     const body = await r.json();
     // Only GEMINI_API_KEY is set here: OpenRouter models are hidden until OPENROUTER_API_KEY is.
     assert.deepEqual(body.models.map((m) => m.id).sort(), MODELS.filter((m) => m.provider === "gemini").map((m) => m.id).sort());
-    assert.equal(body.defaultModel, "auto");
+    assert.equal(body.defaultModel, "gemini-3.6-flash"); // a real model: there is no automatic selection
     assert.ok(body.models.every((m) => m.provider === "Gemini API"));
-    assert.deepEqual(body.limits.outputCap, 50_000);
+    assert.deepEqual(body.limits.outputCap, 300_000);
     assert.equal(body.limits.rateLimitScope, "per-instance");
-    for (const m of body.models) assert.ok(m.maxOutput <= 50_000);
+    for (const m of body.models) assert.ok(m.maxOutput <= 300_000);
   });
 
   test("no authentication routes exist", async () => {

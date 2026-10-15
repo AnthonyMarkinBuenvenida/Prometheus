@@ -1,6 +1,8 @@
 {
-  "name": "HiveMind",
+  "name": "Prometheus",
   "description": "A workspace-style AI chat app powered by the Gemini API: streaming answers with visible thinking, model picker, math and code rendering, themes, and conversations saved in the browser.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

@@ -38,7 +38,7 @@ export const GENERATION_DEFAULTS = {
 } satisfies Partial<Settings>;
 
 export const DEFAULT_SETTINGS: Settings = {
-  model: "auto",
+  model: null, // the server's default model
   ...GENERATION_DEFAULTS,
   theme: "dark",
   fontSize: "medium",
@@ -59,8 +59,8 @@ export function normalizeSettings(stored: unknown): Settings {
   const s = (stored && typeof stored === "object" ? stored : {}) as Record<string, unknown>;
   const d = DEFAULT_SETTINGS;
   return {
-    // No saved choice (or the pre-router default) → Auto.
-    model: typeof s.model === "string" && s.model ? s.model : d.model,
+    // No saved choice, or "auto" saved before automatic selection was removed → the server's default model.
+    model: typeof s.model === "string" && s.model && s.model !== "auto" ? s.model : d.model,
     temperature: num(s.temperature, 0, 2, d.temperature),
     topP: num(s.topP, 0.01, 1, d.topP),
     // The UI clamps to the active model's limit; here only enforce a sane positive range.

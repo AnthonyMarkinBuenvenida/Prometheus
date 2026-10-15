@@ -5,7 +5,7 @@ import { useChat } from "../state/chat";
 import { useServer } from "../state/server";
 import { useSettings } from "../state/settings";
 import { useToast } from "../state/toast";
-import { AUTO_MODEL_ID, type Message } from "../types";
+import type { Message } from "../types";
 import { Icon, Logo } from "./Icon";
 import { Markdown } from "./Markdown";
 import "./Message.css";
@@ -80,12 +80,12 @@ function formatDecision(debug: unknown, route: NonNullable<Message["route"]>): s
     .join("\n");
 }
 
-/** "Auto · Gemini API" chip that expands to why this model answered (and, for developers, the full decision). */
+/** Chip shown when a fallback model answered (or routing details are on): expands to why, and for developers the full decision. */
 function RouteDetails({ message }: { message: Message }) {
   const [open, setOpen] = useState(false);
   const route = message.route;
   if (!route || (route.mode === "manual" && !route.fallbackFrom.length && !message.routeDebug)) return null;
-  const label = route.mode === AUTO_MODEL_ID ? `Auto · ${route.provider}` : `${route.provider} · fallback`;
+  const label = route.provider;
   return (
     <>
       <button type="button" className={`msg-route${open ? " is-open" : ""}`} aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -220,8 +220,7 @@ function UserMessage({ message, conversationId }: { message: Message; conversati
 
 function AssistantMessage({ message, conversationId, isLast }: { message: Message; conversationId: string; isLast: boolean }) {
   const { regenerate, send, streaming } = useChat();
-  const { modelLabel, isAuto, autoModel } = useServer();
-  const { update } = useSettings();
+  const { modelLabel } = useServer();
   const isStreaming = message.status === "streaming";
   const cutOff = !!message.content && ((message.status === "done" && message.finishReason === "length") || (message.status === "error" && message.errorCode === "max_duration"));
   const continueButton = isLast && cutOff && (
@@ -239,7 +238,7 @@ function AssistantMessage({ message, conversationId, isLast }: { message: Messag
         <span className="msg-avatar" aria-hidden="true">
           <Logo size={20} />
         </span>
-        <span className="msg-model">{message.model === AUTO_MODEL_ID ? "Auto" : modelLabel(message.model)}</span>
+        <span className="msg-model">{modelLabel(message.model)}</span>
       </div>
       {message.route && <div className="msg-route-row"><RouteDetails message={message} /></div>}
 
@@ -279,21 +278,6 @@ function AssistantMessage({ message, conversationId, isLast }: { message: Messag
                 <Icon name="refresh" size={15} />
                 Retry
               </button>
-              {/* A manually chosen model failed: offer the router instead of switching silently. */}
-              {!isAuto && autoModel && message.errorCode !== "max_duration" && message.errorCode !== "too_many_streams" && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={!!streaming}
-                  onClick={() => {
-                    update({ model: AUTO_MODEL_ID });
-                    regenerate(conversationId, message.id, autoModel);
-                  }}
-                >
-                  <Icon name="bolt" size={15} />
-                  Switch to Auto
-                </button>
-              )}
             </div>
           )}
         </div>

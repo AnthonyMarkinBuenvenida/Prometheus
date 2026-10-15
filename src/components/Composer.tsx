@@ -14,7 +14,7 @@ export function Composer() {
   const { send, stop, streaming } = useChat();
   const draft = useDraftValue();
   const { setDraft, composerRef } = useDraftActions();
-  const { activeModel, isAuto, health, modelsStatus } = useServer();
+  const { activeModel, health, modelsStatus } = useServer();
   const { settings, update } = useSettings();
   const toast = useToast();
   const [files, setFiles] = useState<AttachedFile[]>([]);
@@ -86,7 +86,7 @@ export function Composer() {
     if (!streaming) void addFiles(e.dataTransfer.files);
   };
 
-  const placeholder = blockedReason ? `${blockedReason}. Check the status in the sidebar.` : activeModel ? (isAuto ? "Message HiveMind" : `Message ${activeModel.label}`) : "Loading models…";
+  const placeholder = blockedReason ? `${blockedReason}. Check the status in the sidebar.` : activeModel ? `Message ${activeModel.label}` : "Loading models…";
 
   return (
     <div className="composer-wrap">
@@ -167,15 +167,7 @@ export function Composer() {
               className="chip"
               aria-pressed={settings.thinking}
               onClick={() => update({ thinking: !settings.thinking })}
-              data-tooltip={
-                isAuto
-                  ? settings.thinking
-                    ? "Models reason before answering, more for harder messages"
-                    : "Faster answers: minimal reasoning"
-                  : settings.thinking
-                    ? "Model reasons step by step before answering"
-                    : "Faster answers without a reasoning step"
-              }
+              data-tooltip={settings.thinking ? "Model reasons step by step before answering" : "Faster answers without a reasoning step"}
               data-tooltip-side="top"
             >
               <Icon name="spark" size={15} />

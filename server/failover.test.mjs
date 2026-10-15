@@ -49,7 +49,7 @@ before(async () => {
     const call = { provider: isGemini ? "gemini" : "openrouter", model, n: calls.length, closedEarly: false, ended: false };
     calls.push(call);
     res.on("close", () => {
-      if (!call.ended) call.closedEarly = true; // HiveMind cancelled this upstream request
+      if (!call.ended) call.closedEarly = true; // Prometheus cancelled this upstream request
     });
     const end = (s = "") => {
       call.ended = true;
@@ -102,7 +102,8 @@ beforeEach(() => {
 });
 
 const HARD = "Design a distributed rate limiter architecture that is scalable, handles race conditions and edge cases.";
-const request = (extra = {}) => ({ model: "auto", messages: [{ role: "user", content: HARD }], ...extra });
+// Failover only happens with "fall back if my chosen model fails" on (there is no automatic selection).
+const request = (extra = {}) => ({ model: "gemini-3.8-flash", allowFallback: true, messages: [{ role: "user", content: HARD }], ...extra });
 
 async function chat(body) {
   const r = await fetch(base + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -243,7 +244,7 @@ describe("pre-answer failover", () => {
 
   test("7. manual model, fallback off: a reasoning-only failure is an error, not a switch", async () => {
     behaviour = () => "reason-fail";
-    const { events } = await chat(request({ model: "gemini-3.8-flash" }));
+    const { events } = await chat(request({ model: "gemini-3.8-flash", allowFallback: false }));
     assert.equal(calls.length, 1);
     assert.equal(events.some((e) => e.type === "reset"), false);
     assert.equal(events.at(-1).type, "error");
@@ -280,12 +281,16 @@ describe("pre-answer failover", () => {
     assert.match(shown.error, /No available model could answer right now \(tried .+, .+, .+\)/);
   });
 
-  test("health: the model that failed during reasoning cools down and is skipped next time", async () => {
+  test("health: the model that failed during reasoning cools down and isn't used as a fallback", async () => {
     behaviour = (c) => (c.n === 0 ? "reason-fail" : "ok");
     await chat(request());
     const failed = calls[0].model;
+    const status = (await (await fetch(base + "/api/models")).json()).models.find((m) => m.id === failed).status;
+    assert.equal(status, "cooling");
+    // Another chosen model fails next: the cooling model is not picked as its fallback.
     calls = [];
-    await chat(request());
-    assert.notEqual(calls[0].model, failed);
+    behaviour = (c) => (c.n === 0 ? { status: 503, json: busy } : "ok");
+    await chat(request({ model: "gemini-3.7-flash" }));
+    assert.notEqual(calls[1].model, failed);
   });
 });
